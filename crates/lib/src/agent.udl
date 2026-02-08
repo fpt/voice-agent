@@ -1,0 +1,51 @@
+namespace agent_core {
+    [Throws=AgentError]
+    Agent agent_new(AgentConfig config);
+};
+
+[Error]
+enum AgentError {
+    "NetworkError",
+    "ParseError",
+    "ConfigError",
+    "InternalError",
+};
+
+dictionary AgentConfig {
+    string? model_path;
+    string base_url;
+    string model;
+    string? api_key;
+    boolean use_harmony_template;
+    f32? temperature;
+    u32 max_tokens;
+    string? language;
+    string? working_dir;
+    string? reasoning_effort;
+};
+
+dictionary AgentResponse {
+    string content;
+    string role;
+    boolean is_final;
+    sequence<string>? keywords;
+    string? reasoning;
+};
+
+interface Agent {
+    [Throws=AgentError]
+    AgentResponse step(string user_input);
+
+    string? process_backchannel(string partial_input, u64 pause_ms);
+
+    void reset();
+
+    string get_conversation_history();
+
+    void set_system_prompt(string prompt);
+
+    void add_skill(string name, string description, string prompt);
+
+    [Throws=AgentError]
+    string chat_once(string input);
+};

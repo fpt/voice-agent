@@ -1,0 +1,40 @@
+[package]
+name = "lib"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[lib]
+crate-type = ["lib", "staticlib", "cdylib"]
+name = "agent_core"
+
+[dependencies]
+crossbeam.workspace = true
+parking_lot.workspace = true
+ureq.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+anyhow.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+uniffi = { workspace = true, features = [ "cli" ] }
+uniffi_bindgen = "0.28"
+camino = "1.1"
+schemars = { version = "0.8", features = ["derive"] }
+glob = "0.3"
+llama-cpp-2 = "0.1"
+encoding_rs = "0.8"
+native-tls = "0.2"
+
+
+[dev-dependencies]
+tempfile = "3"
+
+[build-dependencies]
+uniffi = { workspace = true, features = ["build"] }
+
+[[bin]]
+name = "uniffi-bindgen-swift"
+path = "uniffi-bindgen-swift.rs"
