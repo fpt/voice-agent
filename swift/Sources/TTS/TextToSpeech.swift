@@ -33,25 +33,32 @@ public class TextToSpeech: NSObject, @unchecked Sendable {
     }
 
     private let config: Config
+    private let resolvedVoice: AVSpeechSynthesisVoice?
 
     public init(config: Config) {
         self.config = config
         self.synthesizer = AVSpeechSynthesizer()
+
+        // Validate voice at init time
+        if let id = config.voice {
+            if let voice = AVSpeechSynthesisVoice(identifier: id) {
+                self.resolvedVoice = voice
+            } else {
+                self.resolvedVoice = nil
+                // Can't use logger before super.init, print directly
+                print("[TTS] ERROR: Voice '\(id)' not found on this system. Run /voices to list available voices.")
+            }
+        } else {
+            self.resolvedVoice = AVSpeechSynthesisVoice(language: "en-US")
+        }
+
         super.init()
         self.synthesizer.delegate = self
 
-        // Configure audio session for macOS
-        #if os(macOS)
-        configureAudioSession()
-        #endif
+        if let v = resolvedVoice {
+            logger.info("TTS voice: \(v.name) [\(v.identifier)]")
+        }
     }
-
-    #if os(macOS)
-    private func configureAudioSession() {
-        // On macOS, we need to ensure audio routing is set up
-        logger.info("Configuring audio session for TTS")
-    }
-    #endif
 
     /// Speak the given text asynchronously
     /// - Parameter text: The text to speak
@@ -78,27 +85,21 @@ public class TextToSpeech: NSObject, @unchecked Sendable {
             }
             self.isSpeaking = true
 
-            let utterance = AVSpeechUtterance(string: text)
-
-            // Configure voice
-            if let voiceName = self.config.voice {
-                utterance.voice = AVSpeechSynthesisVoice(identifier: voiceName)
-                self.logger.debug("Using voice: \(voiceName)")
-            } else {
-                // Use default voice for current locale
-                utterance.voice = AVSpeechSynthesisVoice(language: "en-US")
-                self.logger.debug("Using default en-US voice")
+            guard let voice = self.resolvedVoice else {
+                self.logger.error("No valid TTS voice configured, skipping speech")
+                self.isSpeaking = false
+                self.completion = nil
+                continuation.resume()
+                return
             }
 
-            // Configure speech parameters
+            let utterance = AVSpeechUtterance(string: text)
+            utterance.voice = voice
             utterance.rate = self.config.rate
             utterance.pitchMultiplier = self.config.pitchMultiplier
             utterance.volume = self.config.volume
 
             self.logger.info("Speaking: \"\(text.prefix(50))\(text.count > 50 ? "..." : "")\"")
-            self.logger.info("TTS Config: rate=\(self.config.rate), pitch=\(self.config.pitchMultiplier), volume=\(self.config.volume)")
-            self.logger.info("Voice: \(utterance.voice?.name ?? "unknown") [\(utterance.voice?.identifier ?? "unknown")]")
-
             self.synthesizer.speak(utterance)
         }
     }
@@ -126,30 +127,22 @@ public class TextToSpeech: NSObject, @unchecked Sendable {
             stop()
         }
 
+        guard let voice = resolvedVoice else {
+            logger.error("No valid TTS voice configured, skipping speech")
+            completion?()
+            return
+        }
+
         self.completion = completion
         isSpeaking = true
 
         let utterance = AVSpeechUtterance(string: text)
-
-        // Configure voice
-        if let voiceName = config.voice {
-            utterance.voice = AVSpeechSynthesisVoice(identifier: voiceName)
-            logger.debug("Using voice: \(voiceName)")
-        } else {
-            // Use default voice for current locale
-            utterance.voice = AVSpeechSynthesisVoice(language: "en-US")
-            logger.debug("Using default en-US voice")
-        }
-
-        // Configure speech parameters
+        utterance.voice = voice
         utterance.rate = config.rate
         utterance.pitchMultiplier = config.pitchMultiplier
         utterance.volume = config.volume
 
         logger.info("Speaking: \"\(text.prefix(50))\(text.count > 50 ? "..." : "")\"")
-        logger.info("TTS Config: rate=\(config.rate), pitch=\(config.pitchMultiplier), volume=\(config.volume)")
-        logger.info("Voice: \(utterance.voice?.name ?? "unknown") [\(utterance.voice?.identifier ?? "unknown")]")
-
         synthesizer.speak(utterance)
     }
 
