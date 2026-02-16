@@ -461,6 +461,11 @@ impl Agent {
             .chat(&messages)
             .map_err(|e| AgentError::NetworkError(e.to_string()))?;
 
+        // Store assistant response in memory (but not the input) so user can ask about it
+        self.memory
+            .lock()
+            .add_message(ChatMessage::assistant(response.clone()));
+
         Ok(response)
     }
 }
