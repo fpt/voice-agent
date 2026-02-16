@@ -9,27 +9,39 @@ public struct SkillLoader {
         public let prompt: String
     }
 
-    /// Scan ~/.claude for all SKILL.md files and parse them.
-    public static func loadAll() -> [SkillDefinition] {
+    /// Scan directories for SKILL.md files and parse them.
+    /// Searches: project-local `skills/` directory + `~/.claude/plugins`.
+    public static func loadAll(projectDir: String? = nil) -> [SkillDefinition] {
+        var searchDirs: [String] = []
+
+        // Project-local skills/ directory
+        if let dir = projectDir {
+            let skillsDir = "\(dir)/skills"
+            if FileManager.default.fileExists(atPath: skillsDir) {
+                searchDirs.append(skillsDir)
+            }
+        }
+
+        // ~/.claude/plugins
         let home = FileManager.default.homeDirectoryForCurrentUser.path
         let pluginsDir = "\(home)/.claude/plugins"
-
-        guard FileManager.default.fileExists(atPath: pluginsDir) else {
-            return []
+        if FileManager.default.fileExists(atPath: pluginsDir) {
+            searchDirs.append(pluginsDir)
         }
 
         var results: [SkillDefinition] = []
         let fm = FileManager.default
 
-        // Recursively find all SKILL.md files under ~/.claude/plugins
-        if let enumerator = fm.enumerator(atPath: pluginsDir) {
-            while let relativePath = enumerator.nextObject() as? String {
-                guard relativePath.hasSuffix("/SKILL.md") || relativePath == "SKILL.md" else {
-                    continue
-                }
-                let fullPath = "\(pluginsDir)/\(relativePath)"
-                if let skill = parse(path: fullPath) {
-                    results.append(skill)
+        for dir in searchDirs {
+            if let enumerator = fm.enumerator(atPath: dir) {
+                while let relativePath = enumerator.nextObject() as? String {
+                    guard relativePath.hasSuffix("/SKILL.md") || relativePath == "SKILL.md" else {
+                        continue
+                    }
+                    let fullPath = "\(dir)/\(relativePath)"
+                    if let skill = parse(path: fullPath) {
+                        results.append(skill)
+                    }
                 }
             }
         }

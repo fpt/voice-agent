@@ -152,30 +152,13 @@ do {
     exit(1)
 }
 
-// Register skills
-agent.addSkill(
-    name: "claude-activity-report",
-    description: "Use when receiving [System Event] messages about Claude Code activity. Summarize what Claude Code did and provide a brief spoken update.",
-    prompt: """
-    You received a system event about Claude Code activity. Your task:
-    1. Parse the event summary to understand what Claude Code did
-    2. Provide a brief, conversational spoken response (1-2 sentences)
-    3. Focus on what changed and what's most noteworthy
-    4. Use natural speech patterns suitable for text-to-speech
-
-    Examples of good responses:
-    - "Claude Code just edited three files in the authentication module."
-    - "Looks like the tests all passed. Twenty-one tests, zero failures."
-    - "Claude Code committed a fix for the login bug."
-    - "Claude Code is reading through the configuration files."
-    """
-)
-// Load skills from ~/.claude/plugins
-let discoveredSkills = SkillLoader.loadAll()
+// Load skills from skills/ directory and ~/.claude/plugins
+let projectDir = URL(fileURLWithPath: configPath).deletingLastPathComponent().path
+let discoveredSkills = SkillLoader.loadAll(projectDir: projectDir)
 for skill in discoveredSkills {
     agent.addSkill(name: skill.name, description: skill.description, prompt: skill.prompt)
 }
-logger.info("Skills registered (\(1 + discoveredSkills.count) total: 1 built-in + \(discoveredSkills.count) from ~/.claude)")
+logger.info("Skills registered (\(discoveredSkills.count) from skills/ and ~/.claude)")
 
 // Initialize TTS
 let ttsConfig = config.tts ?? Config.TTSConfig(
@@ -241,15 +224,15 @@ if let wc = config.watcher, wc.enabled {
         print("\n\u{1B}[36m[Watcher]\u{1B}[0m \(summary)\n")
 
         do {
-            let agentResponse = try agentLocked {
-                try agent.stepWithAllowedTools(
-                    userInput: "[System Event] \(summary)",
-                    allowedTools: ["lookup_skill"]
+            let response = try agentLocked {
+                try agent.chatOnce(
+                    input: "[System Event] \(summary)",
+                    skillName: "claude-activity-report"
                 )
             }
             let finalResponse = config.llm.harmonyTemplate
-                ? HarmonyParser.extractFinalResponse(agentResponse.content)
-                : agentResponse.content
+                ? HarmonyParser.extractFinalResponse(response)
+                : response
 
             print("Assistant: \(finalResponse)\n")
 

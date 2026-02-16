@@ -435,8 +435,10 @@ impl Agent {
         })
     }
 
-    /// One-shot chat without tools or memory — for event reporting
-    pub fn chat_once(&self, input: String) -> Result<String, AgentError> {
+    /// One-shot chat without tools — for event reporting.
+    /// If `skill_name` is provided, injects that skill's prompt body.
+    /// Otherwise injects the skill catalog as before.
+    pub fn chat_once(&self, input: String, skill_name: Option<String>) -> Result<String, AgentError> {
         let mut messages = Vec::new();
 
         // Use custom system prompt if set
@@ -444,8 +446,12 @@ impl Agent {
             messages.push(ChatMessage::system(prompt.clone()));
         }
 
-        // Inject skill catalog
-        if let Some(catalog) = self.skill_registry.catalog() {
+        // Inject skill body or catalog
+        if let Some(ref name) = skill_name {
+            if let Some(prompt) = self.skill_registry.get(name) {
+                messages.push(ChatMessage::system(prompt));
+            }
+        } else if let Some(catalog) = self.skill_registry.catalog() {
             messages.push(ChatMessage::system(catalog));
         }
 

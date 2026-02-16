@@ -516,7 +516,7 @@ public protocol AgentProtocol : AnyObject {
     
     func addSkill(name: String, description: String, prompt: String) 
     
-    func chatOnce(input: String) throws  -> String
+    func chatOnce(input: String, skillName: String?) throws  -> String
     
     func getConversationHistory()  -> String
     
@@ -591,10 +591,11 @@ open func addSkill(name: String, description: String, prompt: String) {try! rust
 }
 }
     
-open func chatOnce(input: String)throws  -> String {
+open func chatOnce(input: String, skillName: String?)throws  -> String {
     return try  FfiConverterString.lift(try rustCallWithError(FfiConverterTypeAgentError.lift) {
     uniffi_agent_core_fn_method_agent_chat_once(self.uniffiClonePointer(),
-        FfiConverterString.lower(input),$0
+        FfiConverterString.lower(input),
+        FfiConverterOptionString.lower(skillName),$0
     )
 })
 }
@@ -1123,7 +1124,7 @@ private var initializationResult: InitializationResult = {
     if (uniffi_agent_core_checksum_method_agent_add_skill() != 41357) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_agent_core_checksum_method_agent_chat_once() != 57768) {
+    if (uniffi_agent_core_checksum_method_agent_chat_once() != 37266) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_agent_core_checksum_method_agent_get_conversation_history() != 59460) {

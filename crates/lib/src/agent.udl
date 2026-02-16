@@ -50,5 +50,5 @@ interface Agent {
     AgentResponse step_with_allowed_tools(string user_input, sequence<string> allowed_tools);
 
     [Throws=AgentError]
-    string chat_once(string input);
+    string chat_once(string input, string? skill_name);
 };
