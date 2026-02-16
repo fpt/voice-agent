@@ -140,7 +140,18 @@ do {
                 let configDir = configURL.deletingLastPathComponent()
                 resolvedPath = configDir.appendingPathComponent(systemPromptPath).path
             }
-            let systemPrompt = try String(contentsOfFile: resolvedPath, encoding: .utf8)
+            var systemPrompt = try String(contentsOfFile: resolvedPath, encoding: .utf8)
+
+            // Replace template variables
+            let languagePrompt: String = {
+                switch language {
+                case "ja": return "日本語で回答してください。"
+                case "en": return ""
+                default: return "Respond in \(language)."
+                }
+            }()
+            systemPrompt = systemPrompt.replacingOccurrences(of: "{language}", with: languagePrompt)
+
             agent.setSystemPrompt(prompt: systemPrompt)
             logger.info("Loaded system prompt from \(resolvedPath)")
         } catch {
