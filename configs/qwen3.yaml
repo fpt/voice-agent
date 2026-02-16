@@ -1,0 +1,32 @@
+llm:
+  modelPath: "../models/Qwen3-8B-Q4_K_M.gguf"
+  modelRepo: "Qwen/Qwen3-8B-GGUF"
+  modelFile: "Qwen3-8B-Q4_K_M.gguf"
+  baseURL: ""
+  model: "qwen3:8b"
+  harmonyTemplate: false
+  temperature: 0.7
+  maxTokens: 2048
+
+agent:
+  systemPromptPath: null
+  maxTurns: 50
+  language: "en"
+
+tts:
+  enabled: true
+  voice: "com.apple.voice.enhanced.en-US.Zoe"  # com.apple.voice.enhanced.ja-JP.Kyoko for Japanese
+  rate: 0.5
+  pitchMultiplier: 1.0
+  volume: 1.0
+
+stt:
+  enabled: true                              # Enable speech-to-text (Apple SpeechTranscriber)
+  locale: "en-US"                            # BCP47 locale for transcription
+  censor: false                              # Enable etiquette replacements
+
+watcher:
+  enabled: true                              # Watch Claude Code activity
+  debounceInterval: 3.0                      # Seconds to batch events before summarizing
+  # socketPath: null                         # Unix socket path (null = /tmp/voice-agent-<uid>.sock)
+  # sessionPath: null                        # Session JSONL path (null = auto-detect)

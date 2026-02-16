@@ -62,9 +62,9 @@ run-openai:
 	@echo "Using API key: $${OPENAI_API_KEY:0:8}..."
 	@cd swift && swift run voice-agent --config ../configs/openai.yaml
 
-run-ministral3:
-	@echo "Running Voice Agent with Ministral-3B (local)..."
-	@cd swift && swift run voice-agent --config ../configs/ministral3.yaml
+run-qwen3:
+	@echo "Running Voice Agent with Qwen3 (local)..."
+	@cd swift && swift run voice-agent --config ../configs/qwen3.yaml
 
 run-openai-ja:
 	@if [ -z "$$OPENAI_API_KEY" ]; then \
