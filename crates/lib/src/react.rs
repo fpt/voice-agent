@@ -1,5 +1,5 @@
 use crate::llm::{ChatMessage, LlmProvider, LlmResponse, ToolCallInfo};
-use crate::tool::ToolRegistry;
+use crate::tool::ToolAccess;
 use crate::AgentError;
 
 const DEFAULT_MAX_ITERATIONS: u32 = 10;
@@ -10,7 +10,7 @@ const DEFAULT_MAX_ITERATIONS: u32 = 10;
 pub fn run(
     client: &dyn LlmProvider,
     messages: &mut Vec<ChatMessage>,
-    tools: &ToolRegistry,
+    tools: &dyn ToolAccess,
     max_iterations: Option<u32>,
 ) -> Result<(String, Option<String>), AgentError> {
     let max_iter = max_iterations.unwrap_or(DEFAULT_MAX_ITERATIONS);
@@ -66,7 +66,7 @@ pub fn run(
 }
 
 /// Execute a single tool call, returning the result string (or error message)
-fn execute_tool_call(tools: &ToolRegistry, call: &ToolCallInfo) -> String {
+fn execute_tool_call(tools: &dyn ToolAccess, call: &ToolCallInfo) -> String {
     match tools.call(&call.name, call.arguments.clone()) {
         Ok(result) => result,
         Err(e) => {
@@ -80,6 +80,7 @@ fn execute_tool_call(tools: &ToolRegistry, call: &ToolCallInfo) -> String {
 mod tests {
     use super::*;
     use crate::llm::{ChatRole, ToolDefinition};
+    use crate::tool::ToolRegistry;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     /// Mock LLM provider for testing the ReAct loop

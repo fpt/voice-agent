@@ -241,12 +241,15 @@ if let wc = config.watcher, wc.enabled {
         print("\n\u{1B}[36m[Watcher]\u{1B}[0m \(summary)\n")
 
         do {
-            let rawResponse = try agentLocked {
-                try agent.chatOnce(input: "[System Event] \(summary)")
+            let agentResponse = try agentLocked {
+                try agent.stepWithAllowedTools(
+                    userInput: "[System Event] \(summary)",
+                    allowedTools: ["lookup_skill"]
+                )
             }
             let finalResponse = config.llm.harmonyTemplate
-                ? HarmonyParser.extractFinalResponse(rawResponse)
-                : rawResponse
+                ? HarmonyParser.extractFinalResponse(agentResponse.content)
+                : agentResponse.content
 
             print("Assistant: \(finalResponse)\n")
 

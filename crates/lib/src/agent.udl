@@ -47,5 +47,8 @@ interface Agent {
     void add_skill(string name, string description, string prompt);
 
     [Throws=AgentError]
+    AgentResponse step_with_allowed_tools(string user_input, sequence<string> allowed_tools);
+
+    [Throws=AgentError]
     string chat_once(string input);
 };

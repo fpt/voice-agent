@@ -11,6 +11,7 @@
 //!   echo "Read the file configs/default.yaml" | MODEL_PATH=... cargo run -p app
 
 use agent_core::{ChatMessage, create_provider};
+use agent_core::tool::ToolAccess;
 
 use std::io::{self, BufRead};
 

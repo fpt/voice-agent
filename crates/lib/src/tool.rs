@@ -13,6 +13,13 @@ pub trait ToolHandler: Send + Sync {
     fn call(&self, args: serde_json::Value) -> Result<String, AgentError>;
 }
 
+/// Trait for accessing tools (implemented by both ToolRegistry and FilteredToolRegistry)
+pub trait ToolAccess {
+    fn get_definitions(&self) -> Vec<ToolDefinition>;
+    fn call(&self, name: &str, args: serde_json::Value) -> Result<String, AgentError>;
+    fn is_empty(&self) -> bool;
+}
+
 /// Registry of available tools
 pub struct ToolRegistry {
     tools: Vec<Box<dyn ToolHandler>>,
@@ -28,7 +35,17 @@ impl ToolRegistry {
         self.tools.push(tool);
     }
 
-    pub fn get_definitions(&self) -> Vec<ToolDefinition> {
+    /// Create a filtered view that only exposes the named tools
+    pub fn filtered(&self, allowed: &[String]) -> FilteredToolRegistry<'_> {
+        FilteredToolRegistry {
+            tools: &self.tools,
+            allowed: allowed.to_vec(),
+        }
+    }
+}
+
+impl ToolAccess for ToolRegistry {
+    fn get_definitions(&self) -> Vec<ToolDefinition> {
         self.tools
             .iter()
             .map(|t| ToolDefinition {
@@ -39,7 +56,7 @@ impl ToolRegistry {
             .collect()
     }
 
-    pub fn call(&self, name: &str, args: serde_json::Value) -> Result<String, AgentError> {
+    fn call(&self, name: &str, args: serde_json::Value) -> Result<String, AgentError> {
         let tool = self
             .tools
             .iter()
@@ -52,8 +69,48 @@ impl ToolRegistry {
         Ok(result)
     }
 
-    pub fn is_empty(&self) -> bool {
+    fn is_empty(&self) -> bool {
         self.tools.is_empty()
+    }
+}
+
+/// A filtered view of a ToolRegistry that only exposes certain tools
+pub struct FilteredToolRegistry<'a> {
+    tools: &'a [Box<dyn ToolHandler>],
+    allowed: Vec<String>,
+}
+
+impl<'a> ToolAccess for FilteredToolRegistry<'a> {
+    fn get_definitions(&self) -> Vec<ToolDefinition> {
+        self.tools
+            .iter()
+            .filter(|t| self.allowed.iter().any(|a| a == t.name()))
+            .map(|t| ToolDefinition {
+                name: t.name().to_string(),
+                description: t.description().to_string(),
+                parameters: t.parameters_schema(),
+            })
+            .collect()
+    }
+
+    fn call(&self, name: &str, args: serde_json::Value) -> Result<String, AgentError> {
+        if !self.allowed.iter().any(|a| a == name) {
+            return Err(AgentError::InternalError(format!("Tool not allowed: {}", name)));
+        }
+        let tool = self
+            .tools
+            .iter()
+            .find(|t| t.name() == name)
+            .ok_or_else(|| AgentError::InternalError(format!("Unknown tool: {}", name)))?;
+
+        tracing::info!("Calling tool: {} with args: {}", name, args);
+        let result = tool.call(args)?;
+        tracing::debug!("Tool {} returned {} chars", name, result.len());
+        Ok(result)
+    }
+
+    fn is_empty(&self) -> bool {
+        !self.tools.iter().any(|t| self.allowed.iter().any(|a| a == t.name()))
     }
 }
 

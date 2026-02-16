@@ -14,6 +14,7 @@ use std::sync::Arc;
 
 pub use harmony::HarmonyTemplate;
 pub use llm::{create_provider, ChatMessage, ChatRole};
+use tool::ToolAccess;
 pub use memory::ConversationMemory;
 pub use state_capsule::StateCapsule;
 pub use state_updater::{RuleBasedStateUpdater, StateUpdater};
@@ -346,6 +347,94 @@ impl Agent {
         self.skill_registry.add(name, description, prompt);
     }
 
+    /// Process user input with only a subset of tools enabled
+    pub fn step_with_allowed_tools(
+        &self,
+        user_input: String,
+        allowed_tools: Vec<String>,
+    ) -> Result<AgentResponse, AgentError> {
+        let mut memory = self.memory.lock();
+
+        // Update state capsule based on user input
+        let prev_capsule = memory.get_state_capsule().clone();
+        let updated_capsule = self
+            .state_updater
+            .update(&prev_capsule, &user_input)
+            .map_err(|e| AgentError::InternalError(e.to_string()))?;
+        memory.update_state_capsule(updated_capsule);
+
+        // Add user message to memory
+        memory.add_message(ChatMessage::user(user_input.clone()));
+
+        // Get conversation context
+        let mut messages = memory.get_messages();
+
+        // Prepend custom system prompt if set
+        let system_prompt = self.system_prompt.lock().clone();
+        if let Some(prompt) = system_prompt {
+            messages.insert(0, ChatMessage::system(prompt));
+        }
+
+        // Prepend state capsule as system message if not empty
+        let state_prompt = memory.get_state_prompt();
+        if !state_prompt.is_empty() {
+            let insert_pos = if self.system_prompt.lock().is_some() { 1 } else { 0 };
+            messages.insert(insert_pos, ChatMessage::system(state_prompt));
+        }
+
+        // Inject skill catalog
+        if let Some(catalog) = self.skill_registry.catalog() {
+            messages.push(ChatMessage::system(catalog));
+        }
+
+        // Apply Harmony template if enabled
+        let formatted_messages = if self.config.use_harmony_template {
+            HarmonyTemplate::format_messages(&messages)
+        } else {
+            messages.clone()
+        };
+
+        // Use ReAct loop with filtered tools
+        let filtered = self.tool_registry.filtered(&allowed_tools);
+        let (response_text, keywords, reasoning) = if self.client.supports_tools()
+            && !filtered.is_empty()
+        {
+            let mut react_messages = formatted_messages;
+            let (text, reasoning) = react::run(
+                self.client.as_ref(),
+                &mut react_messages,
+                &filtered,
+                None,
+            )?;
+            (text, Vec::new(), reasoning)
+        } else if self.client.supports_structured_output() {
+            let schema = get_keyword_schema();
+            let json_response = self
+                .client
+                .chat_with_schema(&formatted_messages, schema, "conversation_response")
+                .map_err(|e| AgentError::NetworkError(e.to_string()))?;
+            let (text, keywords) = parse_structured_response(&json_response)?;
+            (text, keywords, None)
+        } else {
+            let response = self
+                .client
+                .chat(&formatted_messages)
+                .map_err(|e| AgentError::NetworkError(e.to_string()))?;
+            (response, Vec::new(), None)
+        };
+
+        // Add assistant response to memory
+        memory.add_message(ChatMessage::assistant(response_text.clone()));
+
+        Ok(AgentResponse {
+            content: response_text,
+            role: "assistant".to_string(),
+            is_final: true,
+            keywords: if keywords.is_empty() { None } else { Some(keywords) },
+            reasoning,
+        })
+    }
+
     /// One-shot chat without tools or memory — for event reporting
     pub fn chat_once(&self, input: String) -> Result<String, AgentError> {
         let mut messages = Vec::new();
@@ -353,6 +442,11 @@ impl Agent {
         // Use custom system prompt if set
         if let Some(prompt) = self.system_prompt.lock().as_ref() {
             messages.push(ChatMessage::system(prompt.clone()));
+        }
+
+        // Inject skill catalog
+        if let Some(catalog) = self.skill_registry.catalog() {
+            messages.push(ChatMessage::system(catalog));
         }
 
         messages.push(ChatMessage::system(

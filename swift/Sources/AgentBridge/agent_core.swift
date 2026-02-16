@@ -528,6 +528,8 @@ public protocol AgentProtocol : AnyObject {
     
     func step(userInput: String) throws  -> AgentResponse
     
+    func stepWithAllowedTools(userInput: String, allowedTools: [String]) throws  -> AgentResponse
+    
 }
 
 open class Agent:
@@ -630,6 +632,15 @@ open func step(userInput: String)throws  -> AgentResponse {
     return try  FfiConverterTypeAgentResponse.lift(try rustCallWithError(FfiConverterTypeAgentError.lift) {
     uniffi_agent_core_fn_method_agent_step(self.uniffiClonePointer(),
         FfiConverterString.lower(userInput),$0
+    )
+})
+}
+    
+open func stepWithAllowedTools(userInput: String, allowedTools: [String])throws  -> AgentResponse {
+    return try  FfiConverterTypeAgentResponse.lift(try rustCallWithError(FfiConverterTypeAgentError.lift) {
+    uniffi_agent_core_fn_method_agent_step_with_allowed_tools(self.uniffiClonePointer(),
+        FfiConverterString.lower(userInput),
+        FfiConverterSequenceString.lower(allowedTools),$0
     )
 })
 }
@@ -1128,6 +1139,9 @@ private var initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_agent_core_checksum_method_agent_step() != 4924) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_agent_core_checksum_method_agent_step_with_allowed_tools() != 47034) {
         return InitializationResult.apiChecksumMismatch
     }
 
