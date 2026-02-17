@@ -55,7 +55,8 @@ fn main() {
         temperature,
         max_tokens,
         reasoning_effort,
-    );
+    )
+    .expect("Failed to create LLM provider");
 
     // Create tool registry
     let skill_registry = std::sync::Arc::new(agent_core::skill::SkillRegistry::new());

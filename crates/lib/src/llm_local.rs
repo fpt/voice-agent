@@ -47,7 +47,24 @@ impl LlamaLocalProvider {
             .map_err(|e| anyhow::anyhow!("Failed to init llama backend: {}", e))?;
         backend.void_logs();
 
-        let model_params = LlamaModelParams::default();
+        // On iOS simulator, Metal doesn't support residency sets — use CPU only.
+        // On real iOS devices and macOS, offload all layers to Metal GPU.
+        let use_gpu = if cfg!(target_os = "ios") && cfg!(target_abi = "sim") {
+            tracing::info!("  iOS simulator detected — using CPU only (no Metal)");
+            false
+        } else {
+            tracing::info!("  Using Metal GPU acceleration");
+            true
+        };
+
+        if !use_gpu {
+            // Prevent Metal residency set assertions on simulator
+            unsafe { std::env::set_var("GGML_METAL_NO_RESIDENCY", "1"); }
+        }
+
+        let gpu_layers: u32 = if use_gpu { 999 } else { 0 };
+        let model_params = LlamaModelParams::default()
+            .with_n_gpu_layers(gpu_layers);
 
         let model = LlamaModel::load_from_file(&backend, Path::new(model_path), &model_params)
             .map_err(|e| anyhow::anyhow!("Failed to load model: {}", e))?;

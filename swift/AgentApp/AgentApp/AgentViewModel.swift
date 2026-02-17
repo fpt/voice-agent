@@ -15,6 +15,35 @@ struct ChatMessage: Identifiable {
     }
 }
 
+enum LLMProvider: String, CaseIterable {
+    case openai = "openai"
+    case llamacpp = "llamacpp"
+
+    var displayName: String {
+        switch self {
+        case .openai: return "OpenAI"
+        case .llamacpp: return "Llama.cpp"
+        }
+    }
+}
+
+enum ModelDownloadState: Equatable {
+    case notDownloaded
+    case downloading(progress: Double)
+    case downloaded(path: String)
+    case failed(message: String)
+
+    static func == (lhs: ModelDownloadState, rhs: ModelDownloadState) -> Bool {
+        switch (lhs, rhs) {
+        case (.notDownloaded, .notDownloaded): return true
+        case (.downloading(let a), .downloading(let b)): return a == b
+        case (.downloaded(let a), .downloaded(let b)): return a == b
+        case (.failed(let a), .failed(let b)): return a == b
+        default: return false
+        }
+    }
+}
+
 /// Main view model for the agent chat interface
 @Observable
 final class AgentViewModel {
@@ -25,6 +54,7 @@ final class AgentViewModel {
     var isSpeaking = false
     var isListening = false
     var liveTranscript = ""
+    var modelDownloadState: ModelDownloadState = .notDownloaded
 
     private var agent: Agent?
     private let synthesizer = AVSpeechSynthesizer()
@@ -38,7 +68,19 @@ final class AgentViewModel {
     private var recognitionRequest: SFSpeechAudioBufferRecognitionRequest?
     private var recognitionTask: SFSpeechRecognitionTask?
 
+    // Download
+    private var downloadTask: URLSessionDownloadTask?
+
+    // Model info
+    static let modelFileName = "Qwen3-1.7B-Q8_0.gguf"
+    static let modelDownloadURL = "https://huggingface.co/Qwen/Qwen3-1.7B-GGUF/resolve/main/Qwen3-1.7B-Q8_0.gguf"
+    static let modelSizeBytes: Int64 = 1_834_426_016
+
     // Config
+    var provider: LLMProvider {
+        get { LLMProvider(rawValue: UserDefaults.standard.string(forKey: "llm_provider") ?? "openai") ?? .openai }
+        set { UserDefaults.standard.set(newValue.rawValue, forKey: "llm_provider") }
+    }
     var apiKey: String {
         get { UserDefaults.standard.string(forKey: "openai_api_key") ?? "" }
         set { UserDefaults.standard.set(newValue, forKey: "openai_api_key") }
@@ -61,7 +103,18 @@ final class AgentViewModel {
     }
 
     var isConfigured: Bool {
-        !apiKey.isEmpty
+        switch provider {
+        case .openai:
+            return !apiKey.isEmpty
+        case .llamacpp:
+            if case .downloaded = modelDownloadState { return true }
+            return false
+        }
+    }
+
+    var modelFilePath: String {
+        let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first!
+        return docs.appendingPathComponent(Self.modelFileName).path
     }
 
     init() {
@@ -70,18 +123,17 @@ final class AgentViewModel {
         }
         synthesizer.delegate = ttsDelegate
 
-        // Pick a default voice
         if let voice = AVSpeechSynthesisVoice(language: language == "ja" ? "ja-JP" : "en-US") {
             ttsVoice = voice
+        }
+
+        // Check if model already downloaded
+        if FileManager.default.fileExists(atPath: modelFilePath) {
+            modelDownloadState = .downloaded(path: modelFilePath)
         }
     }
 
     func initializeAgent() {
-        guard !apiKey.isEmpty else {
-            errorMessage = "Please set your OpenAI API key in Settings."
-            return
-        }
-
         do {
             let languagePrompt: String = {
                 switch language {
@@ -96,19 +148,45 @@ final class AgentViewModel {
                 systemPrompt += "\n\(languagePrompt)"
             }
 
-            let config = AgentConfig(
-                modelPath: nil,
-                baseUrl: baseURL,
-                model: model,
-                apiKey: apiKey,
-                useHarmonyTemplate: false,
-                temperature: nil,
-                maxTokens: 8192,
-                language: language,
-                workingDir: NSHomeDirectory(),
-                reasoningEffort: "medium",
-                watcherDebounceSecs: nil
-            )
+            let config: AgentConfig
+            switch provider {
+            case .openai:
+                guard !apiKey.isEmpty else {
+                    errorMessage = "Please set your OpenAI API key in Settings."
+                    return
+                }
+                config = AgentConfig(
+                    modelPath: nil,
+                    baseUrl: baseURL,
+                    model: model,
+                    apiKey: apiKey,
+                    useHarmonyTemplate: false,
+                    temperature: nil,
+                    maxTokens: 8192,
+                    language: language,
+                    workingDir: NSHomeDirectory(),
+                    reasoningEffort: "medium",
+                    watcherDebounceSecs: nil
+                )
+            case .llamacpp:
+                guard case .downloaded(let path) = modelDownloadState else {
+                    errorMessage = "Please download a model first."
+                    return
+                }
+                config = AgentConfig(
+                    modelPath: path,
+                    baseUrl: "",
+                    model: "",
+                    apiKey: nil,
+                    useHarmonyTemplate: false,
+                    temperature: 0.7,
+                    maxTokens: 2048,
+                    language: language,
+                    workingDir: NSHomeDirectory(),
+                    reasoningEffort: nil,
+                    watcherDebounceSecs: nil
+                )
+            }
 
             agent = try agentNew(config: config)
             agent?.setSystemPrompt(prompt: systemPrompt)
@@ -117,6 +195,74 @@ final class AgentViewModel {
             errorMessage = "Failed to initialize agent: \(error.localizedDescription)"
         }
     }
+
+    // MARK: - Model Download
+
+    func downloadModel() {
+        guard case .notDownloaded = modelDownloadState else { return }
+        guard let url = URL(string: Self.modelDownloadURL) else { return }
+
+        modelDownloadState = .downloading(progress: 0)
+
+        let session = URLSession(configuration: .default, delegate: nil, delegateQueue: nil)
+        let task = session.downloadTask(with: url) { [weak self] tempURL, response, error in
+            Task { @MainActor in
+                guard let self else { return }
+                if let error {
+                    self.modelDownloadState = .failed(message: error.localizedDescription)
+                    return
+                }
+                guard let tempURL else {
+                    self.modelDownloadState = .failed(message: "No file received")
+                    return
+                }
+                do {
+                    let dest = URL(fileURLWithPath: self.modelFilePath)
+                    if FileManager.default.fileExists(atPath: dest.path) {
+                        try FileManager.default.removeItem(at: dest)
+                    }
+                    try FileManager.default.moveItem(at: tempURL, to: dest)
+                    self.modelDownloadState = .downloaded(path: dest.path)
+                } catch {
+                    self.modelDownloadState = .failed(message: error.localizedDescription)
+                }
+            }
+        }
+
+        // Observe progress
+        let observation = task.progress.observe(\.fractionCompleted) { [weak self] progress, _ in
+            Task { @MainActor in
+                guard let self else { return }
+                self.modelDownloadState = .downloading(progress: progress.fractionCompleted)
+            }
+        }
+        // Keep observation alive until task completes
+        Task {
+            while !task.progress.isFinished && !task.progress.isCancelled {
+                try? await Task.sleep(for: .milliseconds(100))
+            }
+            withExtendedLifetime(observation) {}
+        }
+
+        downloadTask = task
+        task.resume()
+    }
+
+    func cancelDownload() {
+        downloadTask?.cancel()
+        downloadTask = nil
+        modelDownloadState = .notDownloaded
+    }
+
+    func deleteModel() {
+        try? FileManager.default.removeItem(atPath: modelFilePath)
+        modelDownloadState = .notDownloaded
+        if provider == .llamacpp {
+            agent = nil
+        }
+    }
+
+    // MARK: - Chat
 
     func send() {
         let text = inputText.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -169,7 +315,6 @@ final class AgentViewModel {
     }
 
     private func startListening() {
-        // Stop TTS if playing
         if isSpeaking { stopSpeaking() }
 
         SFSpeechRecognizer.requestAuthorization { [weak self] status in
@@ -185,7 +330,6 @@ final class AgentViewModel {
     }
 
     private func beginRecording() {
-        // Cancel any previous task
         recognitionTask?.cancel()
         recognitionTask = nil
 
@@ -230,9 +374,6 @@ final class AgentViewModel {
                 if let result {
                     self.liveTranscript = result.bestTranscription.formattedString
                 }
-                if error != nil || (result?.isFinal ?? false) {
-                    // Only auto-stop if final result or error; manual stop handled by stopListening
-                }
             }
         }
     }
@@ -246,7 +387,6 @@ final class AgentViewModel {
         recognitionTask = nil
         isListening = false
 
-        // Send the transcribed text
         let text = liveTranscript.trimmingCharacters(in: .whitespacesAndNewlines)
         if !text.isEmpty {
             inputText = text

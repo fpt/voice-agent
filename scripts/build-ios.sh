@@ -2,7 +2,9 @@
 # Build Rust agent_core for iOS (device + simulator).
 # Produces an XCFramework at swift/AgentApp/agent_core.xcframework
 #
-# Usage: bash scripts/build-ios.sh
+# Usage:
+#   bash scripts/build-ios.sh              # OpenAI only (no llama.cpp)
+#   bash scripts/build-ios.sh --local      # With llama.cpp for on-device inference
 #
 # Prerequisites: rustup target add aarch64-apple-ios aarch64-apple-ios-sim
 
@@ -12,18 +14,37 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 CRATES_DIR="$ROOT_DIR/crates"
 OUTPUT_DIR="$ROOT_DIR/swift/AgentApp"
+CARGO_TOML="$CRATES_DIR/lib/Cargo.toml"
 
-echo "Building agent_core for iOS..."
+# Parse args
+FEATURES_FLAG="--no-default-features"
+if [[ "${1:-}" == "--local" ]]; then
+    FEATURES_FLAG=""
+    echo "Building agent_core for iOS WITH llama.cpp..."
+else
+    echo "Building agent_core for iOS (OpenAI only)..."
+fi
+
+# Temporarily remove cdylib from crate-type (iOS cross-link fails for dylibs
+# due to libc++ tbd stub mismatch in Xcode 26 beta).
+cp "$CARGO_TOML" "$CARGO_TOML.bak"
+sed -i '' 's/crate-type = \["lib", "staticlib", "cdylib"\]/crate-type = ["lib", "staticlib"]/' "$CARGO_TOML"
+trap 'mv "$CARGO_TOML.bak" "$CARGO_TOML"' EXIT
+
+export SDKROOT
+export IPHONEOS_DEPLOYMENT_TARGET=26.2
 
 # Build for device (aarch64-apple-ios)
 echo "  [1/3] Building for iOS device (aarch64-apple-ios)..."
 cd "$CRATES_DIR"
-cargo build -p lib --release --no-default-features \
+SDKROOT=$(xcrun --sdk iphoneos --show-sdk-path) \
+    cargo build -p lib --release $FEATURES_FLAG \
     --target aarch64-apple-ios 2>&1 | tail -3
 
 # Build for simulator (aarch64-apple-ios-sim)
 echo "  [2/3] Building for iOS simulator (aarch64-apple-ios-sim)..."
-cargo build -p lib --release --no-default-features \
+SDKROOT=$(xcrun --sdk iphonesimulator --show-sdk-path) \
+    cargo build -p lib --release $FEATURES_FLAG \
     --target aarch64-apple-ios-sim 2>&1 | tail -3
 
 # Create XCFramework
@@ -60,10 +81,12 @@ xcodebuild -create-xcframework \
     -library "$SIM_LIB" -headers "$SIM_HEADERS" \
     -output "$XCFW_PATH" 2>&1 | tail -3
 
+# Copy Bridge header
+cp "$HEADER" "$OUTPUT_DIR/Bridge/"
+
 echo ""
 echo "Done! XCFramework: $XCFW_PATH"
 echo ""
 echo "Next steps:"
 echo "  1. Open swift/AgentApp/AgentApp.xcodeproj in Xcode"
-echo "  2. Drag agent_core.xcframework into the project (if not already added)"
-echo "  3. Build and run"
+echo "  2. Build and run"

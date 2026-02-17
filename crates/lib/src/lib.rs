@@ -164,7 +164,8 @@ pub fn agent_new(config: AgentConfig) -> Result<Arc<Agent>, AgentError> {
         config.temperature,
         config.max_tokens,
         config.reasoning_effort.clone(),
-    );
+    )
+    .map_err(|e| AgentError::ConfigError(e.to_string()))?;
 
     // Create state updater
     let state_updater: Box<dyn StateUpdater> = Box::new(RuleBasedStateUpdater::new());

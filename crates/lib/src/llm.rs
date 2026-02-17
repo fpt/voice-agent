@@ -699,38 +699,40 @@ pub fn create_provider(
     temperature: Option<f32>,
     max_tokens: u32,
     reasoning_effort: Option<String>,
-) -> Box<dyn LlmProvider> {
+) -> Result<Box<dyn LlmProvider>, anyhow::Error> {
     if let Some(ref path) = model_path {
         #[cfg(feature = "local")]
         {
             tracing::info!("Using local llama.cpp provider (FFI)");
             let temp = temperature.unwrap_or(0.7);
-            match crate::llm_local::LlamaLocalProvider::new(path, temp, max_tokens, 8192) {
-                Ok(provider) => return Box::new(provider),
-                Err(e) => {
-                    tracing::error!("Failed to create local provider: {}", e);
-                    panic!("Failed to load model from {}: {}", path, e);
-                }
-            }
+            let provider =
+                crate::llm_local::LlamaLocalProvider::new(path, temp, max_tokens, 8192)
+                    .map_err(|e| {
+                        tracing::error!("Failed to create local provider: {}", e);
+                        anyhow::anyhow!("Failed to load model from {}: {}", path, e)
+                    })?;
+            return Ok(Box::new(provider));
         }
         #[cfg(not(feature = "local"))]
         {
             let _ = path;
-            panic!("Local model support not compiled in. Build with --features local");
+            anyhow::bail!(
+                "Local model support not compiled in. Build with --features local"
+            );
         }
     }
 
     if let Some(key) = api_key {
         tracing::info!("Using OpenAI provider (API key provided)");
-        Box::new(OpenAiProvider::new(
+        Ok(Box::new(OpenAiProvider::new(
             key,
             model,
             temperature,
             max_tokens,
             reasoning_effort,
-        ))
+        )))
     } else {
-        panic!("No model_path or api_key provided. Set MODEL_PATH for local inference or OPENAI_API_KEY for cloud.");
+        anyhow::bail!("No model_path or api_key provided. Set MODEL_PATH for local inference or OPENAI_API_KEY for cloud.");
     }
 }
 

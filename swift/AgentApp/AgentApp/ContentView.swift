@@ -48,12 +48,14 @@ struct ContentView: View {
     private var setupPrompt: some View {
         VStack(spacing: 16) {
             Spacer()
-            Image(systemName: "key.fill")
+            Image(systemName: viewModel.provider == .openai ? "key.fill" : "arrow.down.circle")
                 .font(.system(size: 48))
                 .foregroundStyle(.secondary)
-            Text("OpenAI API Key Required")
+            Text(viewModel.provider == .openai
+                 ? "OpenAI API Key Required"
+                 : "Model Download Required")
                 .font(.title2)
-            Text("Tap the gear icon to configure your API key.")
+            Text("Tap the gear icon to configure.")
                 .foregroundStyle(.secondary)
             Spacer()
         }
@@ -173,6 +175,8 @@ struct MessageBubble: View {
     }
 }
 
+// MARK: - Settings
+
 struct SettingsView: View {
     @Bindable var viewModel: AgentViewModel
     @Environment(\.dismiss) private var dismiss
@@ -180,16 +184,19 @@ struct SettingsView: View {
     var body: some View {
         NavigationStack {
             Form {
-                Section("OpenAI") {
-                    SecureField("API Key", text: $viewModel.apiKey)
-                        .textContentType(.password)
-                        .autocorrectionDisabled()
-                    TextField("Base URL", text: $viewModel.baseURL)
-                        .autocorrectionDisabled()
-                        .textInputAutocapitalization(.never)
-                    TextField("Model", text: $viewModel.model)
-                        .autocorrectionDisabled()
-                        .textInputAutocapitalization(.never)
+                Section("Provider") {
+                    Picker("LLM Provider", selection: $viewModel.provider) {
+                        ForEach(LLMProvider.allCases, id: \.self) { p in
+                            Text(p.displayName).tag(p)
+                        }
+                    }
+                    .pickerStyle(.segmented)
+                }
+
+                if viewModel.provider == .openai {
+                    openAISection
+                } else {
+                    llamaSection
                 }
 
                 Section("Agent") {
@@ -214,6 +221,122 @@ struct SettingsView: View {
                 }
             }
         }
+    }
+
+    private var openAISection: some View {
+        Section("OpenAI") {
+            SecureField("API Key", text: $viewModel.apiKey)
+                .textContentType(.password)
+                .autocorrectionDisabled()
+            TextField("Base URL", text: $viewModel.baseURL)
+                .autocorrectionDisabled()
+                .textInputAutocapitalization(.never)
+            TextField("Model", text: $viewModel.model)
+                .autocorrectionDisabled()
+                .textInputAutocapitalization(.never)
+        }
+    }
+
+    private var llamaSection: some View {
+        Section("Local Model") {
+            modelRow
+        }
+    }
+
+    @ViewBuilder
+    private var modelRow: some View {
+        switch viewModel.modelDownloadState {
+        case .notDownloaded:
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Qwen3-1.7B (Q8_0)")
+                    .font(.headline)
+                Text("1.83 GB download")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Button {
+                    viewModel.downloadModel()
+                } label: {
+                    Label("Download Model", systemImage: "arrow.down.circle.fill")
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.borderedProminent)
+            }
+            .padding(.vertical, 4)
+
+        case .downloading(let progress):
+            VStack(alignment: .leading, spacing: 8) {
+                HStack {
+                    Text("Qwen3-1.7B (Q8_0)")
+                        .font(.headline)
+                    Spacer()
+                    Text("\(Int(progress * 100))%")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .monospacedDigit()
+                }
+                ProgressView(value: progress)
+                    .progressViewStyle(.linear)
+                HStack {
+                    Text(formatBytes(Int64(progress * Double(AgentViewModel.modelSizeBytes))))
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                    Button("Cancel") {
+                        viewModel.cancelDownload()
+                    }
+                    .font(.caption)
+                }
+            }
+            .padding(.vertical, 4)
+
+        case .downloaded:
+            VStack(alignment: .leading, spacing: 8) {
+                HStack {
+                    Image(systemName: "checkmark.circle.fill")
+                        .foregroundStyle(.green)
+                    Text("Qwen3-1.7B (Q8_0)")
+                        .font(.headline)
+                    Spacer()
+                    Text("Ready")
+                        .font(.caption)
+                        .foregroundStyle(.green)
+                }
+                Button(role: .destructive) {
+                    viewModel.deleteModel()
+                } label: {
+                    Label("Delete Model", systemImage: "trash")
+                        .font(.caption)
+                }
+            }
+            .padding(.vertical, 4)
+
+        case .failed(let message):
+            VStack(alignment: .leading, spacing: 8) {
+                HStack {
+                    Image(systemName: "xmark.circle.fill")
+                        .foregroundStyle(.red)
+                    Text("Download Failed")
+                        .font(.headline)
+                }
+                Text(message)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Button {
+                    viewModel.downloadModel()
+                } label: {
+                    Label("Retry", systemImage: "arrow.clockwise")
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.borderedProminent)
+            }
+            .padding(.vertical, 4)
+        }
+    }
+
+    private func formatBytes(_ bytes: Int64) -> String {
+        let formatter = ByteCountFormatter()
+        formatter.countStyle = .file
+        return formatter.string(fromByteCount: bytes)
     }
 }
 
