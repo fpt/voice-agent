@@ -1,0 +1,3 @@
+agent_core.xcframework/
+Bridge/agent_coreFFI.h
+AgentApp/agent_core.swift

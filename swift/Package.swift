@@ -12,15 +12,19 @@ let package = Package(
         .package(url: "https://github.com/jpsim/Yams.git", from: "5.0.0"),
     ],
     targets: [
+        .target(
+            name: "AgentKit",
+            dependencies: ["Util", "AgentBridge", "TTS", "Watcher"],
+            swiftSettings: [.swiftLanguageMode(.v5)]
+        ),
         .executableTarget(
             name: "VoiceAgentCLI",
             dependencies: [
+                "AgentKit",
                 "Util",
                 "AgentBridge",
                 "CEditline",
-                "TTS",
                 "Audio",
-                "Watcher",
             ],
             swiftSettings: [.swiftLanguageMode(.v5)]
         ),

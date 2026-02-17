@@ -1,6 +1,7 @@
 pub mod event_router;
 mod harmony;
 mod llm;
+#[cfg(feature = "local")]
 pub mod llm_local;
 pub mod mcp;
 pub mod mcp_client;

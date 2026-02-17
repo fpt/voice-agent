@@ -1,20 +1,12 @@
 import Foundation
 import Util
 import AgentBridge
+import AgentKit
 import CEditline
 import TTS
 import Audio
-import Watcher
 
 let logger = Logger("Main")
-
-// Serialize agent.step() calls between voice/text and watcher
-nonisolated(unsafe) var _agentLockStorage = os_unfair_lock()
-func agentLocked<T>(_ body: () throws -> T) rethrows -> T {
-    os_unfair_lock_lock(&_agentLockStorage)
-    defer { os_unfair_lock_unlock(&_agentLockStorage) }
-    return try body()
-}
 
 // readline (libedit) callback globals — C callback can't capture Swift context
 nonisolated(unsafe) var _rlCompletedLine: UnsafeMutablePointer<CChar>? = nil
@@ -64,7 +56,6 @@ func runMain() async {
 let arguments = CommandLine.arguments
 var configPath = "configs/default.yaml"
 
-// Simple argument parsing
 for (index, arg) in arguments.enumerated() {
     if arg == "--config" && index + 1 < arguments.count {
         configPath = arguments[index + 1]
@@ -110,127 +101,16 @@ do {
     logger.info("Using default configuration")
 }
 
-// Initialize agent
-let apiKey: String? = {
-    if let envKey = ProcessInfo.processInfo.environment["OPENAI_API_KEY"], !envKey.isEmpty {
-        logger.info("Using OPENAI_API_KEY from environment variable")
-        return envKey
-    } else if let configKey = config.llm.apiKey, !configKey.isEmpty {
-        logger.info("Using API key from configuration file")
-        return configKey
-    } else {
-        logger.info("No API key provided (using local provider)")
-        return nil
-    }
-}()
-
-let language = config.agent.language ?? "en"
-
-// Resolve model path (relative to config dir or absolute)
-var modelPath: String? = nil
-if let cfgModelPath = config.llm.modelPath {
-    if cfgModelPath.hasPrefix("/") {
-        modelPath = cfgModelPath
-    } else {
-        let configDir = URL(fileURLWithPath: configPath).deletingLastPathComponent()
-        modelPath = configDir.appendingPathComponent(cfgModelPath).path
-    }
-
-    // Auto-download if model file is missing
-    if let path = modelPath, !FileManager.default.fileExists(atPath: path),
-       let repo = config.llm.modelRepo, let file = config.llm.modelFile {
-        do {
-            modelPath = try await ModelDownloader.ensureModel(path: path, repo: repo, file: file)
-        } catch {
-            logger.error("Failed to download model: \(error)")
-            exit(1)
-        }
-    }
-}
-
-let agentConfig = AgentConfig(
-    modelPath: modelPath,
-    baseUrl: config.llm.baseURL,
-    model: config.llm.model,
-    apiKey: apiKey,
-    useHarmonyTemplate: config.llm.harmonyTemplate,
-    temperature: config.llm.temperature,
-    maxTokens: UInt32(config.llm.maxTokens),
-    language: language,
-    workingDir: FileManager.default.currentDirectoryPath,
-    reasoningEffort: config.llm.reasoningEffort,
-    watcherDebounceSecs: (config.watcher?.enabled == true)
-        ? config.watcher?.debounceInterval ?? 3.0
-        : nil
-)
-
-let agent: Agent
+// Initialize AgentSession (agent + TTS + skills)
+let session: AgentSession
 do {
-    agent = try agentNew(config: agentConfig)
-    logger.info("Agent initialized successfully")
-
-    if let systemPromptPath = config.agent.systemPromptPath {
-        do {
-            var resolvedPath = systemPromptPath
-            if !systemPromptPath.hasPrefix("/") {
-                let configURL = URL(fileURLWithPath: configPath)
-                let configDir = configURL.deletingLastPathComponent()
-                resolvedPath = configDir.appendingPathComponent(systemPromptPath).path
-            }
-            var systemPrompt = try String(contentsOfFile: resolvedPath, encoding: .utf8)
-
-            // Replace template variables
-            let languagePrompt: String = {
-                switch language {
-                case "ja": return "日本語で回答してください。"
-                case "en": return ""
-                default: return "Respond in \(language)."
-                }
-            }()
-            systemPrompt = systemPrompt.replacingOccurrences(of: "{language}", with: languagePrompt)
-
-            agent.setSystemPrompt(prompt: systemPrompt)
-            logger.info("Loaded system prompt from \(resolvedPath)")
-        } catch {
-            logger.warning("Failed to load system prompt: \(error)")
-        }
-    }
+    session = try await AgentSession(config: config, configPath: configPath)
 } catch {
     logger.error("Failed to initialize agent: \(error)")
     exit(1)
 }
 
-// Load skills from skills/ directory and ~/.claude/plugins
-let projectDir = URL(fileURLWithPath: configPath).deletingLastPathComponent().path
-let discoveredSkills = SkillLoader.loadAll(projectDir: projectDir)
-for skill in discoveredSkills {
-    agent.addSkill(name: skill.name, description: skill.description, prompt: skill.prompt)
-}
-logger.info("Skills registered (\(discoveredSkills.count) from skills/ and ~/.claude)")
-
-// Initialize TTS
-let ttsConfig = config.tts ?? Config.TTSConfig(
-    enabled: false,
-    voice: nil,
-    rate: 0.5,
-    pitchMultiplier: 1.0,
-    volume: 1.0
-)
-
-let ttsVoice: String? = ttsConfig.voice ?? {
-    switch language {
-    case "ja": return "com.apple.voice.enhanced.ja-JP.Kyoko"
-    default: return "com.apple.voice.enhanced.en-US.Samantha"
-    }
-}()
-
-let tts = TextToSpeech(config: TextToSpeech.Config(
-    enabled: ttsConfig.enabled,
-    voice: ttsVoice,
-    rate: ttsConfig.rate,
-    pitchMultiplier: ttsConfig.pitchMultiplier,
-    volume: ttsConfig.volume
-))
+let ttsEnabled = config.tts?.enabled ?? false
 
 // Initialize STT with SpeechTranscriber
 let sttConfig = config.stt ?? Config.STTConfig(enabled: false)
@@ -259,99 +139,32 @@ if sttConfig.enabled {
     }
 }
 
-// Initialize watcher event sources (SocketReceiver + SessionJSONLWatcher feed into Rust EventRouter)
-var sessionWatcher: SessionJSONLWatcher?
-var socketReceiver: SocketReceiver?
-
-if let wc = config.watcher, wc.enabled {
-    // Start session JSONL watcher
-    let sessionPath = wc.sessionPath ?? SessionJSONLWatcher.findActiveSessionJSONL()
-    if let sp = sessionPath {
-        logger.info("Watching session JSONL: \(sp)")
-        let watcher = SessionJSONLWatcher(filePath: sp)
-        sessionWatcher = watcher
-        Task.detached {
-            for await event in watcher.events() {
-                if let json = event.toRouterJSON() {
-                    try? agent.feedWatcherEvent(json: json)
-                }
-            }
-        }
+// Wire AgentSession callbacks for CLI output
+session.onResponse = { @Sendable text, priority in
+    if priority == .high {
+        print("Assistant: \(text)\n")
     } else {
-        logger.warning("No active session JSONL found to watch")
+        print("Assistant: \(text)\n")
     }
-
-    // Start socket receiver
-    let sockPath = wc.socketPath ?? "/tmp/voice-agent-\(getuid()).sock"
-    let receiver = SocketReceiver(socketPath: sockPath)
-    socketReceiver = receiver
-    do {
-        try receiver.start()
-        logger.info("Socket receiver listening on \(sockPath)")
-        Task.detached {
-            for await event in receiver.events() {
-                if let json = event.toRouterJSON() {
-                    try? agent.feedWatcherEvent(json: json)
-                }
-            }
-        }
-    } catch {
-        logger.error("Failed to start socket receiver: \(error)")
-    }
-}
-
-// Poll Rust EventRouter for summaries (handles both user speech and watcher events)
-let summaryPoller = Task.detached {
-    while !Task.isCancelled {
-        try? await Task.sleep(for: .milliseconds(100))
-        let summaries = agent.drainWatcherSummaries()
-        for summary in summaries {
-            do {
-                if summary.priority == .high {
-                    // User speech — cancel any in-progress watcher TTS
-                    if ttsConfig.enabled {
-                        await MainActor.run { tts.stop(); audioCapture.mute() }
-                    }
-                    let response = try agentLocked {
-                        try agent.step(userInput: summary.text)
-                    }
-                    let finalResponse = config.llm.harmonyTemplate
-                        ? HarmonyParser.extractFinalResponse(response.content)
-                        : response.content
-                    if let reasoning = response.reasoning {
-                        print("\u{1B}[90m💭 \(reasoning)\u{1B}[0m\n")
-                    }
-                    print("Assistant: \(finalResponse)\n")
-                    if ttsConfig.enabled {
-                        await tts.speakAsync(finalResponse)
-                        await MainActor.run { audioCapture.unmute() }
-                    }
-                } else {
-                    // Watcher — normal priority summary
-                    logger.info("[Watcher] \(summary.text)")
-                    print("\n\u{1B}[36m[Watcher]\u{1B}[0m \(summary.text)\n")
-                    let response = try agentLocked {
-                        try agent.chatOnce(
-                            input: "[System Event] \(summary.text)",
-                            skillName: "claude-activity-report"
-                        )
-                    }
-                    let finalResponse = config.llm.harmonyTemplate
-                        ? HarmonyParser.extractFinalResponse(response)
-                        : response
-                    print("Assistant: \(finalResponse)\n")
-                    if ttsConfig.enabled {
-                        await MainActor.run { audioCapture.mute() }
-                        await tts.speakAsync(finalResponse)
-                        await MainActor.run { audioCapture.unmute() }
-                    }
-                }
-            } catch {
-                logger.error("Summary processing error: \(error)")
-            }
+    if ttsEnabled {
+        Task { @MainActor in
+            audioCapture.mute()
+            await session.tts.speakAsync(text)
+            audioCapture.unmute()
         }
     }
 }
+
+session.onWatcherSummary = { @Sendable text in
+    print("\n\u{1B}[36m[Watcher]\u{1B}[0m \(text)\n")
+}
+
+session.onError = { @Sendable error in
+    logger.error("Summary processing error: \(error)")
+}
+
+// Start watcher + summary poller
+session.start()
 
 // Route to voice or text mode
 if sttConfig.enabled {
@@ -360,14 +173,10 @@ if sttConfig.enabled {
     await runTextMode()
 }
 
-// Cleanup watcher resources
-summaryPoller.cancel()
-sessionWatcher?.stop()
-socketReceiver?.stop()
+// Cleanup
+session.stop()
 
 // Skip C++ static destructors to avoid ggml Metal device assertion crash.
-// llama.cpp's global Metal device destructor asserts all resource sets are freed,
-// but Swift/Rust object teardown hasn't completed yet during exit().
 _exit(0)
 
 // MARK: - Text Mode
@@ -410,25 +219,21 @@ Type your messages below. Commands:
         if userInput.isEmpty { continue }
 
         if userInput.hasPrefix("/") {
-            await handleCommand(userInput)
+            handleCommand(userInput)
             continue
         }
 
         do {
-            let response = try agentLocked {
-                try agent.step(userInput: userInput)
-            }
-            let finalResponse = config.llm.harmonyTemplate
-                ? HarmonyParser.extractFinalResponse(response.content)
-                : response.content
+            let response = try session.step(userInput)
+            let finalResponse = session.formatResponse(response.content)
 
             if let reasoning = response.reasoning {
                 print("\u{1B}[90m💭 \(reasoning)\u{1B}[0m\n")
             }
             print("Assistant: \(finalResponse)\n")
 
-            if ttsConfig.enabled {
-                await tts.speakAsync(finalResponse)
+            if ttsEnabled {
+                await session.tts.speakAsync(finalResponse)
             }
 
             turnCount += 1
@@ -439,36 +244,37 @@ Type your messages below. Commands:
     }
 }
 
-func handleCommand(_ command: String) async {
+func handleCommand(_ command: String) {
     switch command {
-    case "/reset":
-        agent.reset()
-        print("Conversation history cleared.\n")
     case "/quit", "/exit":
-        tts.stop()
+        session.tts.stop()
         print("Goodbye!")
         _exit(0)
     case "/help":
         printHelp()
     case "/history":
         print("Conversation History:")
-        print(agent.getConversationHistory())
+        print(session.agent.getConversationHistory())
         print()
+    case "/reset":
+        session.reset()
+        print("Conversation history cleared.\n")
     case "/voices":
         TextToSpeech.printAvailableVoices()
     case "/stop":
-        if tts.speaking { tts.stop(); print("TTS stopped.\n") }
+        if session.tts.speaking { session.tts.stop(); print("TTS stopped.\n") }
         else { print("TTS is not currently speaking.\n") }
     default:
-        print("Unknown command: \(command)")
-        print("Type /help for available commands.\n")
+        if !session.handleCommand(command) {
+            print("Unknown command: \(command)")
+            print("Type /help for available commands.\n")
+        }
     }
 }
 
 // MARK: - Continuous Voice Mode
 
 func runContinuousVoiceMode() async {
-    // -- State for input combining --
     let combineWindowMs = 500
     let micMuteDurationSecs: Double = 3.0
     var bufferedVoice: String? = nil
@@ -477,30 +283,27 @@ func runContinuousVoiceMode() async {
 
     let voiceQueue = VoiceQueue()
 
-    // Mute mic and schedule unmute after timeout
     func muteMicWithTimer() {
         audioCapture.mute()
         micUnmuteTask?.cancel()
         micUnmuteTask = Task { @MainActor in
             try? await Task.sleep(for: .seconds(micMuteDurationSecs))
             guard !Task.isCancelled else { return }
-            if !tts.speaking {
+            if !session.tts.speaking {
                 audioCapture.unmute()
             }
         }
     }
 
-    // Feed combined voice+text input to the agent
     func feedInput(voiceText: String?, typedText: String?) {
         var parts: [String] = []
         if let v = voiceText { parts.append(v) }
         if let t = typedText { parts.append("----text: \(t)") }
         let combined = parts.joined(separator: "\n")
         guard !combined.isEmpty else { return }
-        agent.feedUserSpeech(text: combined)
+        session.agent.feedUserSpeech(text: combined)
     }
 
-    // -- Set up transcription callbacks --
     audioCapture.onVolatileResult = { text in
         print("\r\u{1B}[K  \(text)", terminator: "")
         fflush(stdout)
@@ -510,11 +313,9 @@ func runContinuousVoiceMode() async {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
         print("\r\u{1B}[KYou (voice): \(trimmed)\n")
-        // Enqueue for readline thread to pick up (it checks partial text)
         voiceQueue.enqueue(trimmed)
     }
 
-    // -- Start transcription --
     do {
         try await audioCapture.start()
 
@@ -535,27 +336,22 @@ Commands: /reset /quit /help /history /voices /stop
 
 """)
 
-        // Reset readline callback state
         _rlLineReady = false
         _rlCompletedLine = nil
         _rlGotEOF = false
 
-        // -- Readline thread (libedit callback API + poll) --
         let stdinReader = Task.detached {
             rl_callback_handler_install("> ", rlLineCallback)
 
             while !Task.isCancelled && !_rlGotEOF {
-                // Poll stdin with 50ms timeout
                 var fds = [pollfd(fd: STDIN_FILENO, events: Int16(POLLIN), revents: 0)]
                 let ret = poll(&fds, 1, 50)
 
                 if ret > 0 && (fds[0].revents & Int16(POLLIN)) != 0 {
-                    // Keystroke detected — mute mic
                     await MainActor.run { muteMicWithTimer() }
                     rl_callback_read_char()
                 }
 
-                // Check for completed line (Enter pressed)
                 if _rlLineReady {
                     _rlLineReady = false
                     if let cStr = _rlCompletedLine {
@@ -568,7 +364,7 @@ Commands: /reset /quit /help /history /voices /stop
                             let text = line.trimmingCharacters(in: .whitespacesAndNewlines)
 
                             if text.hasPrefix("/") {
-                                Task { @MainActor in await handleCommand(text) }
+                                handleCommand(text)
                                 return
                             }
 
@@ -589,7 +385,6 @@ Commands: /reset /quit /help /history /voices /stop
                     }
                 }
 
-                // Check for pending voice — combine with partial typed text
                 if let voice = voiceQueue.dequeue() {
                     let partial: String? = {
                         guard let buf = rl_line_buffer else { return nil }
@@ -598,7 +393,6 @@ Commands: /reset /quit /help /history /voices /stop
                     }()
 
                     if let partial = partial {
-                        // Clear readline buffer and redisplay prompt
                         rl_kill_text(0, rl_end)
                         rl_point = 0
                         rl_redisplay()
@@ -608,7 +402,6 @@ Commands: /reset /quit /help /history /voices /stop
                             feedInput(voiceText: voice, typedText: partial)
                         }
                     } else {
-                        // No partial text — use combine timer
                         await MainActor.run {
                             if let existing = bufferedVoice {
                                 bufferedVoice = existing + " " + voice
@@ -620,7 +413,7 @@ Commands: /reset /quit /help /history /voices /stop
                                 try? await Task.sleep(for: .milliseconds(combineWindowMs))
                                 guard !Task.isCancelled else { return }
                                 if let voice = bufferedVoice {
-                                    agent.feedUserSpeech(text: voice)
+                                    session.agent.feedUserSpeech(text: voice)
                                     bufferedVoice = nil
                                 }
                                 combineTimer = nil
@@ -633,7 +426,6 @@ Commands: /reset /quit /help /history /voices /stop
             rl_callback_handler_remove()
         }
 
-        // -- Wait for Ctrl+C --
         let signalSource = DispatchSource.makeSignalSource(signal: SIGINT, queue: .main)
         signal(SIGINT, SIG_IGN)
 
@@ -645,7 +437,6 @@ Commands: /reset /quit /help /history /voices /stop
             signalSource.resume()
         }
 
-        // Cleanup
         stdinReader.cancel()
         micUnmuteTask?.cancel()
         combineTimer?.cancel()

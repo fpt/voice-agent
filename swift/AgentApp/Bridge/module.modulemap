@@ -1,0 +1,5 @@
+module agent_coreFFI [system] {
+    header "agent_coreFFI.h"
+    link "agent_core"
+    export *
+}

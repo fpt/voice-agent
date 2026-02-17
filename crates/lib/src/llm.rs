@@ -701,14 +701,22 @@ pub fn create_provider(
     reasoning_effort: Option<String>,
 ) -> Box<dyn LlmProvider> {
     if let Some(ref path) = model_path {
-        tracing::info!("Using local llama.cpp provider (FFI)");
-        let temp = temperature.unwrap_or(0.7);
-        match crate::llm_local::LlamaLocalProvider::new(path, temp, max_tokens, 8192) {
-            Ok(provider) => return Box::new(provider),
-            Err(e) => {
-                tracing::error!("Failed to create local provider: {}", e);
-                panic!("Failed to load model from {}: {}", path, e);
+        #[cfg(feature = "local")]
+        {
+            tracing::info!("Using local llama.cpp provider (FFI)");
+            let temp = temperature.unwrap_or(0.7);
+            match crate::llm_local::LlamaLocalProvider::new(path, temp, max_tokens, 8192) {
+                Ok(provider) => return Box::new(provider),
+                Err(e) => {
+                    tracing::error!("Failed to create local provider: {}", e);
+                    panic!("Failed to load model from {}: {}", path, e);
+                }
             }
+        }
+        #[cfg(not(feature = "local"))]
+        {
+            let _ = path;
+            panic!("Local model support not compiled in. Build with --features local");
         }
     }
 
