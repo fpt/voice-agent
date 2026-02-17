@@ -1,7 +1,9 @@
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
+use crate::event_router::{EventRouter, ReportEventTool};
 use crate::llm::ToolDefinition;
+use crate::situation::{ReadSituationMessagesTool, SituationMessages};
 use crate::skill::{SkillLookupTool, SkillRegistry};
 use crate::AgentError;
 
@@ -11,6 +13,12 @@ pub trait ToolHandler: Send + Sync {
     fn description(&self) -> &str;
     fn parameters_schema(&self) -> serde_json::Value;
     fn call(&self, args: serde_json::Value) -> Result<String, AgentError>;
+
+    /// Optional dynamic description that can change at runtime (e.g. include live stats).
+    /// When `Some`, this overrides `description()` in tool definitions sent to the LLM.
+    fn dynamic_description(&self) -> Option<String> {
+        None
+    }
 }
 
 /// Trait for accessing tools (implemented by both ToolRegistry and FilteredToolRegistry)
@@ -50,7 +58,9 @@ impl ToolAccess for ToolRegistry {
             .iter()
             .map(|t| ToolDefinition {
                 name: t.name().to_string(),
-                description: t.description().to_string(),
+                description: t
+                    .dynamic_description()
+                    .unwrap_or_else(|| t.description().to_string()),
                 parameters: t.parameters_schema(),
             })
             .collect()
@@ -87,7 +97,9 @@ impl<'a> ToolAccess for FilteredToolRegistry<'a> {
             .filter(|t| self.allowed.iter().any(|a| a == t.name()))
             .map(|t| ToolDefinition {
                 name: t.name().to_string(),
-                description: t.description().to_string(),
+                description: t
+                    .dynamic_description()
+                    .unwrap_or_else(|| t.description().to_string()),
                 parameters: t.parameters_schema(),
             })
             .collect()
@@ -118,12 +130,18 @@ impl<'a> ToolAccess for FilteredToolRegistry<'a> {
 pub fn create_default_registry(
     working_dir: PathBuf,
     skill_registry: Arc<SkillRegistry>,
+    event_router: Option<Arc<EventRouter>>,
+    situation: Arc<SituationMessages>,
 ) -> ToolRegistry {
     let mut registry = ToolRegistry::new();
     registry.register(Box::new(ReadTool::new(working_dir.clone())));
     registry.register(Box::new(GlobTool::new(working_dir)));
     registry.register(Box::new(TaskTool::new()));
     registry.register(Box::new(SkillLookupTool::new(skill_registry)));
+    registry.register(Box::new(ReadSituationMessagesTool::new(situation)));
+    if let Some(router) = event_router {
+        registry.register(Box::new(ReportEventTool::new(router)));
+    }
     registry
 }
 
@@ -591,15 +609,17 @@ mod tests {
     fn test_registry() {
         let dir = std::env::temp_dir();
         let skill_reg = Arc::new(SkillRegistry::new());
-        let registry = create_default_registry(dir, skill_reg);
+        let situation = Arc::new(SituationMessages::default());
+        let registry = create_default_registry(dir, skill_reg, None, situation);
 
         let defs = registry.get_definitions();
-        assert_eq!(defs.len(), 4);
+        assert_eq!(defs.len(), 5);
 
         let names: Vec<&str> = defs.iter().map(|d| d.name.as_str()).collect();
         assert!(names.contains(&"read"));
         assert!(names.contains(&"glob"));
         assert!(names.contains(&"tasks"));
         assert!(names.contains(&"lookup_skill"));
+        assert!(names.contains(&"read_situation_messages"));
     }
 }

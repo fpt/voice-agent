@@ -17,7 +17,7 @@ let package = Package(
             dependencies: [
                 "Util",
                 "AgentBridge",
-                "LLM",
+                "CEditline",
                 "TTS",
                 "Audio",
                 "Watcher",
@@ -27,11 +27,6 @@ let package = Package(
         .target(
             name: "Util",
             dependencies: ["Yams"],
-            swiftSettings: [.swiftLanguageMode(.v5)]
-        ),
-        .target(
-            name: "LLM",
-            dependencies: ["Util", "AgentBridge"],
             swiftSettings: [.swiftLanguageMode(.v5)]
         ),
         .target(
@@ -50,6 +45,10 @@ let package = Package(
             name: "Watcher",
             dependencies: ["Util"],
             swiftSettings: [.swiftLanguageMode(.v5)]
+        ),
+        .systemLibrary(
+            name: "CEditline",
+            path: "Sources/CEditline"
         ),
         .systemLibrary(
             name: "AgentBridgeFFI",

@@ -31,5 +31,8 @@ thiserror = "1.0"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
+# HTTP server (sync)
+tiny_http = "0.12"
+
 # UniFFI
 uniffi = "0.28"

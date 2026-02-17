@@ -11,6 +11,11 @@ enum AgentError {
     "InternalError",
 };
 
+enum EventPriority {
+    "High",
+    "Normal",
+};
+
 dictionary AgentConfig {
     string? model_path;
     string base_url;
@@ -22,6 +27,7 @@ dictionary AgentConfig {
     string? language;
     string? working_dir;
     string? reasoning_effort;
+    f64? watcher_debounce_secs;
 };
 
 dictionary AgentResponse {
@@ -30,6 +36,11 @@ dictionary AgentResponse {
     boolean is_final;
     sequence<string>? keywords;
     string? reasoning;
+};
+
+dictionary EventSummary {
+    string text;
+    EventPriority priority;
 };
 
 interface Agent {
@@ -51,4 +62,11 @@ interface Agent {
 
     [Throws=AgentError]
     string chat_once(string input, string? skill_name);
+
+    sequence<EventSummary> drain_watcher_summaries();
+
+    void feed_user_speech(string text);
+
+    [Throws=AgentError]
+    void feed_watcher_event(string json);
 };

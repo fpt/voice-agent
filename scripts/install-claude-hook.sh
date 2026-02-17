@@ -5,13 +5,13 @@
 # Usage: bash scripts/install-claude-hook.sh
 #
 # What it does:
-#   1. Copies claude-hook.sh to ~/.claude/hooks/
+#   1. Copies voice-agent-hook.sh to ~/.claude/hooks/
 #   2. Merges hook config into ~/.claude/settings.json
 
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-HOOK_SCRIPT="$SCRIPT_DIR/claude-hook.sh"
+HOOK_SCRIPT="$SCRIPT_DIR/voice-agent-hook.sh"
 DEST_DIR="$HOME/.claude/hooks"
 DEST_HOOK="$DEST_DIR/voice-agent-hook.sh"
 SETTINGS="$HOME/.claude/settings.json"

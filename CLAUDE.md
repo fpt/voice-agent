@@ -134,8 +134,8 @@ MODEL_PATH=../models/Qwen3-8B-Q4_K_M.gguf cargo run -p app
 
 Monitors Claude Code via hooks (PostToolUse, Stop events) sent over a Unix domain socket.
 
-- **Hook script**: `scripts/claude-hook.sh` forwards stdin JSON to `/tmp/voice-agent-<uid>.sock`
-- **Install**: `bash scripts/install-claude-hook.sh` copies hook and updates `~/.claude/settings.json`
+- **Hook script**: `scripts/voice-agent-hook.sh` forwards stdin JSON to `/tmp/voice-agent-<uid>.sock`
+- **Install**: `bash scripts/install-voice-agent-hook.sh` copies hook and updates `~/.claude/settings.json`
 - **SocketReceiver** (`swift/Sources/Watcher/`): listens on the socket, parses ndjson
 - **EventPipeline**: debounces events, summarizes via `EventSummarizer`, calls `agent.chatOnce()` with the `claude-activity-report` skill
 - **SessionJSONLWatcher**: also watches Claude Code's session JSONL file for events
@@ -166,8 +166,8 @@ voice-agent/
 │       └── AgentBridgeFFI/     # C module map
 ├── scripts/
 │   ├── gen_uniffi.sh           # Generate UniFFI bindings
-│   ├── install-claude-hook.sh  # Install Claude Code hook
-│   ├── claude-hook.sh          # Hook script (stdin -> socket)
+│   ├── install-voice-agent-hook.sh  # Install Claude Code hook
+│   ├── voice-agent-hook.sh          # Hook script (stdin -> socket)
 │   └── ...
 ├── vendor/uniffi-swift/        # Generated UniFFI outputs
 └── models/                     # GGUF models (gitignored)

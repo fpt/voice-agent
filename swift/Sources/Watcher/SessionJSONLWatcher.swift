@@ -6,6 +6,7 @@ public struct SessionEvent: @unchecked Sendable {
     public let timestamp: String?
     public let message: [String: Any]?   // the "message" field if present
     public let raw: [String: Any]        // full parsed JSON line
+    public let sessionId: String?        // working directory (session identifier)
 
     /// Extract tool_use content blocks from assistant messages
     public var toolUses: [[String: Any]] {
@@ -28,11 +29,28 @@ public struct SessionEvent: @unchecked Sendable {
         }
         return nil
     }
+
+    /// Convert to JSON string for the Rust EventRouter.
+    public func toRouterJSON() -> String? {
+        var dict: [String: Any] = ["source": "session", "type": type]
+        let uses = toolUses.map { tu -> [String: Any] in
+            var entry: [String: Any] = ["name": tu["name"] as? String ?? "unknown"]
+            if let input = tu["input"] as? [String: Any] { entry["input"] = input }
+            return entry
+        }
+        if !uses.isEmpty { dict["tool_uses"] = uses }
+        if let text = textContent { dict["text_content"] = text }
+        if let sid = sessionId { dict["session_id"] = sid }
+        guard let data = try? JSONSerialization.data(withJSONObject: dict) else { return nil }
+        return String(data: data, encoding: .utf8)
+    }
 }
 
 /// Watches a single session JSONL file for new appended lines using DispatchSource (kqueue).
 public class SessionJSONLWatcher {
     private let filePath: String
+    /// Session identifier derived from the JSONL path (decoded project directory).
+    private let sessionId: String?
     private var lastOffset: UInt64 = 0
     private var dispatchSource: DispatchSourceFileSystemObject?
     private var fileDescriptor: Int32 = -1
@@ -40,6 +58,15 @@ public class SessionJSONLWatcher {
 
     public init(filePath: String) {
         self.filePath = filePath
+        // Derive project path from JSONL path:
+        // ~/.claude/projects/-Users-foo-project/xxx.jsonl → /Users/foo/project
+        let dir = (filePath as NSString).deletingLastPathComponent
+        let dirName = (dir as NSString).lastPathComponent
+        if dirName.hasPrefix("-") {
+            self.sessionId = dirName.replacingOccurrences(of: "-", with: "/")
+        } else {
+            self.sessionId = nil
+        }
     }
 
     /// Returns an AsyncStream of new events. Starts watching on first iteration.
@@ -142,7 +169,8 @@ public class SessionJSONLWatcher {
                 type: json["type"] as? String ?? "unknown",
                 timestamp: json["timestamp"] as? String,
                 message: json["message"] as? [String: Any],
-                raw: json
+                raw: json,
+                sessionId: self.sessionId
             )
             continuation?.yield(event)
         }

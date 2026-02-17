@@ -11,8 +11,9 @@ if [ ! -S "$SOCKET" ]; then
     exit 0
 fi
 
-# Read stdin (hook JSON)
+# Read stdin (hook JSON) and inject cwd for session identification
 INPUT=$(cat)
+INPUT="${INPUT%\}},\"cwd\":\"$PWD\"}"
 
 # Forward to Unix socket
 if command -v socat &>/dev/null; then

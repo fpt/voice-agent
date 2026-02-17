@@ -43,8 +43,9 @@ impl LlamaLocalProvider {
         tracing::info!("  Model path: {}", model_path);
         tracing::info!("  Context size: {}", n_ctx);
 
-        let backend = LlamaBackend::init()
+        let mut backend = LlamaBackend::init()
             .map_err(|e| anyhow::anyhow!("Failed to init llama backend: {}", e))?;
+        backend.void_logs();
 
         let model_params = LlamaModelParams::default();
 

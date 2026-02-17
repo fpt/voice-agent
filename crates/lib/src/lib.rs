@@ -1,8 +1,15 @@
+pub mod event_router;
 mod harmony;
 mod llm;
 pub mod llm_local;
+pub mod mcp;
+pub mod mcp_client;
+pub mod mcp_client_http;
+pub mod mcp_server;
+pub mod mcp_server_http;
 mod memory;
 pub mod react;
+pub mod situation;
 pub mod skill;
 mod state_capsule;
 mod state_updater;
@@ -12,6 +19,7 @@ use parking_lot::Mutex;
 use std::path::PathBuf;
 use std::sync::Arc;
 
+pub use event_router::{EventPriority, EventSummary};
 pub use harmony::HarmonyTemplate;
 pub use llm::{create_provider, ChatMessage, ChatRole};
 use tool::ToolAccess;
@@ -79,6 +87,8 @@ pub struct AgentConfig {
     pub language: Option<String>,
     pub working_dir: Option<String>,
     pub reasoning_effort: Option<String>,
+    /// If set, enables the event router with this debounce interval in seconds.
+    pub watcher_debounce_secs: Option<f64>,
 }
 
 impl Default for AgentConfig {
@@ -94,6 +104,7 @@ impl Default for AgentConfig {
             language: Some("en".to_string()),
             working_dir: None,
             reasoning_effort: None,
+            watcher_debounce_secs: None,
         }
     }
 }
@@ -129,6 +140,8 @@ pub struct Agent {
     system_prompt: Arc<Mutex<Option<String>>>,
     tool_registry: tool::ToolRegistry,
     skill_registry: Arc<skill::SkillRegistry>,
+    event_router: Option<Arc<event_router::EventRouter>>,
+    situation: Arc<situation::SituationMessages>,
 }
 
 // Top-level constructor function for UniFFI
@@ -164,7 +177,22 @@ pub fn agent_new(config: AgentConfig) -> Result<Arc<Agent>, AgentError> {
 
     tracing::info!("Tool working directory: {}", working_dir.display());
     let skill_registry = Arc::new(skill::SkillRegistry::new());
-    let tool_registry = tool::create_default_registry(working_dir, skill_registry.clone());
+
+    // Create event router if watcher is enabled
+    let event_router = config.watcher_debounce_secs.map(|secs| {
+        let debounce = std::time::Duration::from_secs_f64(secs);
+        tracing::info!("Event router enabled with {:.1}s debounce", secs);
+        Arc::new(event_router::EventRouter::new(debounce))
+    });
+
+    let situation = Arc::new(situation::SituationMessages::default());
+
+    let tool_registry = tool::create_default_registry(
+        working_dir,
+        skill_registry.clone(),
+        event_router.clone(),
+        situation.clone(),
+    );
 
     Ok(Arc::new(Agent {
         config,
@@ -174,6 +202,8 @@ pub fn agent_new(config: AgentConfig) -> Result<Arc<Agent>, AgentError> {
         system_prompt: Arc::new(Mutex::new(None)),
         tool_registry,
         skill_registry,
+        event_router,
+        situation,
     }))
 }
 
@@ -435,6 +465,41 @@ impl Agent {
         })
     }
 
+    /// Drain all available event summaries (non-blocking).
+    ///
+    /// Returns summaries with priority: `High` for user speech (cancel TTS),
+    /// `Normal` for Claude Code watcher events.
+    pub fn drain_watcher_summaries(&self) -> Vec<event_router::EventSummary> {
+        self.event_router
+            .as_ref()
+            .map(|r| r.drain_summaries())
+            .unwrap_or_default()
+    }
+
+    /// Feed user speech into the event router (high priority, no debounce).
+    pub fn feed_user_speech(&self, text: String) {
+        if let Some(ref router) = self.event_router {
+            router.feed_user_speech(&text);
+        }
+    }
+
+    /// Feed a watcher event directly (without MCP).
+    pub fn feed_watcher_event(&self, json: String) -> Result<(), AgentError> {
+        let router = self.event_router.as_ref().ok_or_else(|| {
+            AgentError::ConfigError("Event router not enabled".to_string())
+        })?;
+        let event: event_router::WatcherEvent = serde_json::from_str(&json)
+            .map_err(|e| AgentError::ParseError(format!("Invalid event JSON: {}", e)))?;
+
+        // Push to volatile situation store for read_situation_messages tool
+        if let Some((line, source, session_id)) = format_event_for_situation(&event) {
+            self.situation.push(line, source, session_id);
+        }
+
+        router.feed(event);
+        Ok(())
+    }
+
     /// One-shot chat without tools — for event reporting.
     /// If `skill_name` is provided, injects that skill's prompt body.
     /// Otherwise injects the skill catalog as before.
@@ -473,5 +538,41 @@ impl Agent {
             .add_message(ChatMessage::assistant(response.clone()));
 
         Ok(response)
+    }
+}
+
+/// Format a WatcherEvent as a one-line situation message.
+/// Returns `(line, source, session_id)` or `None` for events that shouldn't appear.
+fn format_event_for_situation(
+    event: &event_router::WatcherEvent,
+) -> Option<(String, String, String)> {
+    match event {
+        event_router::WatcherEvent::Hook(h) => {
+            let line = if let Some(ref tool) = h.tool_name {
+                if let Some(ref path) = h.file_path {
+                    let basename = std::path::Path::new(path)
+                        .file_name()
+                        .map(|f| f.to_string_lossy().to_string())
+                        .unwrap_or_else(|| path.clone());
+                    format!("[hook] {}: {}", tool, basename)
+                } else {
+                    format!("[hook] {}", tool)
+                }
+            } else {
+                format!("[hook] {}", h.event)
+            };
+            let session_id = h.session_id.clone().unwrap_or_default();
+            Some((line, "hook".to_string(), session_id))
+        }
+        event_router::WatcherEvent::Session(s) => {
+            if s.tool_uses.is_empty() {
+                return None;
+            }
+            let tools: Vec<&str> = s.tool_uses.iter().map(|t| t.name.as_str()).collect();
+            let line = format!("[session] {}: {}", s.event_type, tools.join(", "));
+            let session_id = s.session_id.clone().unwrap_or_default();
+            Some((line, "session".to_string(), session_id))
+        }
+        event_router::WatcherEvent::UserSpeech(_) => None, // goes to main conversation
     }
 }

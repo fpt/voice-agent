@@ -6,6 +6,7 @@ public struct HookEvent: @unchecked Sendable {
     public let toolName: String?
     public let toolInput: [String: Any]?
     public let filePath: String?
+    public let cwd: String?              // working directory (session identifier)
     public let raw: [String: Any]        // full parsed JSON
 
     init(json: [String: Any]) {
@@ -15,7 +16,18 @@ public struct HookEvent: @unchecked Sendable {
         self.toolInput = json["tool_input"] as? [String: Any]
         self.filePath = json["file"] as? String
             ?? (json["tool_input"] as? [String: Any])?["file_path"] as? String
+        self.cwd = json["cwd"] as? String
         self.raw = json
+    }
+
+    /// Convert to JSON string for the Rust EventRouter.
+    public func toRouterJSON() -> String? {
+        var dict: [String: Any] = ["source": "hook", "event": event]
+        if let tool = toolName { dict["tool_name"] = tool }
+        if let path = filePath { dict["file_path"] = path }
+        if let cwd = cwd { dict["session_id"] = cwd }
+        guard let data = try? JSONSerialization.data(withJSONObject: dict) else { return nil }
+        return String(data: data, encoding: .utf8)
     }
 }
 

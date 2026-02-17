@@ -59,9 +59,12 @@ fn main() {
 
     // Create tool registry
     let skill_registry = std::sync::Arc::new(agent_core::skill::SkillRegistry::new());
+    let situation = std::sync::Arc::new(agent_core::situation::SituationMessages::default());
     let tool_registry = agent_core::tool::create_default_registry(
         std::path::PathBuf::from(&working_dir),
         skill_registry,
+        None,
+        situation,
     );
 
     let provider_name = if model_path.is_some() {

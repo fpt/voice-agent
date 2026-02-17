@@ -1,6 +1,7 @@
 import Foundation
 import Util
 import AgentBridge
+import CEditline
 import TTS
 import Audio
 import Watcher
@@ -13,6 +14,39 @@ func agentLocked<T>(_ body: () throws -> T) rethrows -> T {
     os_unfair_lock_lock(&_agentLockStorage)
     defer { os_unfair_lock_unlock(&_agentLockStorage) }
     return try body()
+}
+
+// readline (libedit) callback globals — C callback can't capture Swift context
+nonisolated(unsafe) var _rlCompletedLine: UnsafeMutablePointer<CChar>? = nil
+nonisolated(unsafe) var _rlLineReady = false
+nonisolated(unsafe) var _rlGotEOF = false
+
+private func rlLineCallback(_ line: UnsafeMutablePointer<CChar>?) {
+    if line != nil {
+        _rlCompletedLine = line
+        _rlLineReady = true
+    } else {
+        _rlGotEOF = true
+    }
+}
+
+// Thread-safe voice queue (voice callback on MainActor -> readline thread)
+final class VoiceQueue: @unchecked Sendable {
+    private var queue: [String] = []
+    private var lock = os_unfair_lock()
+
+    func enqueue(_ text: String) {
+        os_unfair_lock_lock(&lock)
+        queue.append(text)
+        os_unfair_lock_unlock(&lock)
+    }
+
+    func dequeue() -> String? {
+        os_unfair_lock_lock(&lock)
+        let v = queue.isEmpty ? nil : queue.removeFirst()
+        os_unfair_lock_unlock(&lock)
+        return v
+    }
 }
 
 // Run async main
@@ -124,7 +158,10 @@ let agentConfig = AgentConfig(
     maxTokens: UInt32(config.llm.maxTokens),
     language: language,
     workingDir: FileManager.default.currentDirectoryPath,
-    reasoningEffort: config.llm.reasoningEffort
+    reasoningEffort: config.llm.reasoningEffort,
+    watcherDebounceSecs: (config.watcher?.enabled == true)
+        ? config.watcher?.debounceInterval ?? 3.0
+        : nil
 )
 
 let agent: Agent
@@ -222,46 +259,11 @@ if sttConfig.enabled {
     }
 }
 
-// Initialize watcher if enabled
+// Initialize watcher event sources (SocketReceiver + SessionJSONLWatcher feed into Rust EventRouter)
 var sessionWatcher: SessionJSONLWatcher?
 var socketReceiver: SocketReceiver?
-var eventPipeline: EventPipeline?
 
 if let wc = config.watcher, wc.enabled {
-    let debounce = wc.debounceInterval ?? 3.0
-
-    let pipeline = EventPipeline(debounceInterval: debounce) { summary in
-        logger.info("[Watcher] \(summary)")
-        print("\n\u{1B}[36m[Watcher]\u{1B}[0m \(summary)\n")
-
-        do {
-            let response = try agentLocked {
-                try agent.chatOnce(
-                    input: "[System Event] \(summary)",
-                    skillName: "claude-activity-report"
-                )
-            }
-            let finalResponse = config.llm.harmonyTemplate
-                ? HarmonyParser.extractFinalResponse(response)
-                : response
-
-            print("Assistant: \(finalResponse)\n")
-
-            if ttsConfig.enabled {
-                await MainActor.run {
-                    audioCapture.mute()
-                }
-                await tts.speakAsync(finalResponse)
-                await MainActor.run {
-                    audioCapture.unmute()
-                }
-            }
-        } catch {
-            logger.error("Watcher agent error: \(error)")
-        }
-    }
-    eventPipeline = pipeline
-
     // Start session JSONL watcher
     let sessionPath = wc.sessionPath ?? SessionJSONLWatcher.findActiveSessionJSONL()
     if let sp = sessionPath {
@@ -270,7 +272,9 @@ if let wc = config.watcher, wc.enabled {
         sessionWatcher = watcher
         Task.detached {
             for await event in watcher.events() {
-                await pipeline.feed(.session(event))
+                if let json = event.toRouterJSON() {
+                    try? agent.feedWatcherEvent(json: json)
+                }
             }
         }
     } else {
@@ -286,11 +290,66 @@ if let wc = config.watcher, wc.enabled {
         logger.info("Socket receiver listening on \(sockPath)")
         Task.detached {
             for await event in receiver.events() {
-                await pipeline.feed(.hook(event))
+                if let json = event.toRouterJSON() {
+                    try? agent.feedWatcherEvent(json: json)
+                }
             }
         }
     } catch {
         logger.error("Failed to start socket receiver: \(error)")
+    }
+}
+
+// Poll Rust EventRouter for summaries (handles both user speech and watcher events)
+let summaryPoller = Task.detached {
+    while !Task.isCancelled {
+        try? await Task.sleep(for: .milliseconds(100))
+        let summaries = agent.drainWatcherSummaries()
+        for summary in summaries {
+            do {
+                if summary.priority == .high {
+                    // User speech — cancel any in-progress watcher TTS
+                    if ttsConfig.enabled {
+                        await MainActor.run { tts.stop(); audioCapture.mute() }
+                    }
+                    let response = try agentLocked {
+                        try agent.step(userInput: summary.text)
+                    }
+                    let finalResponse = config.llm.harmonyTemplate
+                        ? HarmonyParser.extractFinalResponse(response.content)
+                        : response.content
+                    if let reasoning = response.reasoning {
+                        print("\u{1B}[90m💭 \(reasoning)\u{1B}[0m\n")
+                    }
+                    print("Assistant: \(finalResponse)\n")
+                    if ttsConfig.enabled {
+                        await tts.speakAsync(finalResponse)
+                        await MainActor.run { audioCapture.unmute() }
+                    }
+                } else {
+                    // Watcher — normal priority summary
+                    logger.info("[Watcher] \(summary.text)")
+                    print("\n\u{1B}[36m[Watcher]\u{1B}[0m \(summary.text)\n")
+                    let response = try agentLocked {
+                        try agent.chatOnce(
+                            input: "[System Event] \(summary.text)",
+                            skillName: "claude-activity-report"
+                        )
+                    }
+                    let finalResponse = config.llm.harmonyTemplate
+                        ? HarmonyParser.extractFinalResponse(response)
+                        : response
+                    print("Assistant: \(finalResponse)\n")
+                    if ttsConfig.enabled {
+                        await MainActor.run { audioCapture.mute() }
+                        await tts.speakAsync(finalResponse)
+                        await MainActor.run { audioCapture.unmute() }
+                    }
+                }
+            } catch {
+                logger.error("Summary processing error: \(error)")
+            }
+        }
     }
 }
 
@@ -302,9 +361,14 @@ if sttConfig.enabled {
 }
 
 // Cleanup watcher resources
+summaryPoller.cancel()
 sessionWatcher?.stop()
 socketReceiver?.stop()
-await eventPipeline?.stop()
+
+// Skip C++ static destructors to avoid ggml Metal device assertion crash.
+// llama.cpp's global Metal device destructor asserts all resource sets are freed,
+// but Swift/Rust object teardown hasn't completed yet during exit().
+_exit(0)
 
 // MARK: - Text Mode
 
@@ -383,7 +447,7 @@ func handleCommand(_ command: String) async {
     case "/quit", "/exit":
         tts.stop()
         print("Goodbye!")
-        exit(0)
+        _exit(0)
     case "/help":
         printHelp()
     case "/history":
@@ -404,7 +468,39 @@ func handleCommand(_ command: String) async {
 // MARK: - Continuous Voice Mode
 
 func runContinuousVoiceMode() async {
-    // Set up transcription callbacks
+    // -- State for input combining --
+    let combineWindowMs = 500
+    let micMuteDurationSecs: Double = 3.0
+    var bufferedVoice: String? = nil
+    var combineTimer: Task<Void, Never>? = nil
+    var micUnmuteTask: Task<Void, Never>? = nil
+
+    let voiceQueue = VoiceQueue()
+
+    // Mute mic and schedule unmute after timeout
+    func muteMicWithTimer() {
+        audioCapture.mute()
+        micUnmuteTask?.cancel()
+        micUnmuteTask = Task { @MainActor in
+            try? await Task.sleep(for: .seconds(micMuteDurationSecs))
+            guard !Task.isCancelled else { return }
+            if !tts.speaking {
+                audioCapture.unmute()
+            }
+        }
+    }
+
+    // Feed combined voice+text input to the agent
+    func feedInput(voiceText: String?, typedText: String?) {
+        var parts: [String] = []
+        if let v = voiceText { parts.append(v) }
+        if let t = typedText { parts.append("----text: \(t)") }
+        let combined = parts.joined(separator: "\n")
+        guard !combined.isEmpty else { return }
+        agent.feedUserSpeech(text: combined)
+    }
+
+    // -- Set up transcription callbacks --
     audioCapture.onVolatileResult = { text in
         print("\r\u{1B}[K  \(text)", terminator: "")
         fflush(stdout)
@@ -413,42 +509,14 @@ func runContinuousVoiceMode() async {
     audioCapture.onFinalResult = { text in
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
-
-        print("\r\u{1B}[KYou: \(trimmed)\n")
-
-        do {
-            let response = try agentLocked {
-                try agent.step(userInput: trimmed)
-            }
-            let finalResponse = config.llm.harmonyTemplate
-                ? HarmonyParser.extractFinalResponse(response.content)
-                : response.content
-
-            if let reasoning = response.reasoning {
-                print("\u{1B}[90m💭 \(reasoning)\u{1B}[0m\n")
-            }
-            print("Assistant: \(finalResponse)\n")
-
-            if ttsConfig.enabled {
-                Task { @MainActor in
-                    audioCapture.mute()
-                    await tts.speakAsync(finalResponse)
-                    audioCapture.unmute()
-                }
-            }
-        } catch {
-            logger.error("Agent error: \(error)")
-            print("Error: \(error)\n")
-        }
+        print("\r\u{1B}[KYou (voice): \(trimmed)\n")
+        // Enqueue for readline thread to pick up (it checks partial text)
+        voiceQueue.enqueue(trimmed)
     }
 
-    // Start transcription
+    // -- Start transcription --
     do {
         try await audioCapture.start()
-
-        let watcherStatus = config.watcher?.enabled == true
-            ? "Watcher: active (socket: \(socketReceiver?.path ?? "none"))"
-            : "Watcher: disabled"
 
         print("""
 
@@ -459,15 +527,113 @@ func runContinuousVoiceMode() async {
 Model: \(config.llm.model)
 Endpoint: \(config.llm.baseURL)
 STT: Apple SpeechTranscriber (\(locale.identifier))
-\(watcherStatus)
 
-Start speaking! Press Ctrl+C to exit.
+Start speaking or type below. Press Ctrl+C to exit.
+Commands: /reset /quit /help /history /voices /stop
 
 ===========================================
 
 """)
 
-        // Wait for Ctrl+C
+        // Reset readline callback state
+        _rlLineReady = false
+        _rlCompletedLine = nil
+        _rlGotEOF = false
+
+        // -- Readline thread (libedit callback API + poll) --
+        let stdinReader = Task.detached {
+            rl_callback_handler_install("> ", rlLineCallback)
+
+            while !Task.isCancelled && !_rlGotEOF {
+                // Poll stdin with 50ms timeout
+                var fds = [pollfd(fd: STDIN_FILENO, events: Int16(POLLIN), revents: 0)]
+                let ret = poll(&fds, 1, 50)
+
+                if ret > 0 && (fds[0].revents & Int16(POLLIN)) != 0 {
+                    // Keystroke detected — mute mic
+                    await MainActor.run { muteMicWithTimer() }
+                    rl_callback_read_char()
+                }
+
+                // Check for completed line (Enter pressed)
+                if _rlLineReady {
+                    _rlLineReady = false
+                    if let cStr = _rlCompletedLine {
+                        let line = String(cString: cStr)
+                        if !line.isEmpty { add_history(cStr) }
+                        free(cStr)
+                        _rlCompletedLine = nil
+
+                        await MainActor.run {
+                            let text = line.trimmingCharacters(in: .whitespacesAndNewlines)
+
+                            if text.hasPrefix("/") {
+                                Task { @MainActor in await handleCommand(text) }
+                                return
+                            }
+
+                            guard !text.isEmpty else { return }
+
+                            let voice = bufferedVoice
+                            bufferedVoice = nil
+                            combineTimer?.cancel()
+                            combineTimer = nil
+
+                            if let voice = voice {
+                                print("You: \(voice) + text: \(text)\n")
+                            } else {
+                                print("You (text): \(text)\n")
+                            }
+                            feedInput(voiceText: voice, typedText: text)
+                        }
+                    }
+                }
+
+                // Check for pending voice — combine with partial typed text
+                if let voice = voiceQueue.dequeue() {
+                    let partial: String? = {
+                        guard let buf = rl_line_buffer else { return nil }
+                        let s = String(cString: buf)
+                        return s.isEmpty ? nil : s
+                    }()
+
+                    if let partial = partial {
+                        // Clear readline buffer and redisplay prompt
+                        rl_kill_text(0, rl_end)
+                        rl_point = 0
+                        rl_redisplay()
+
+                        await MainActor.run {
+                            print("  [+ text: \(partial)]")
+                            feedInput(voiceText: voice, typedText: partial)
+                        }
+                    } else {
+                        // No partial text — use combine timer
+                        await MainActor.run {
+                            if let existing = bufferedVoice {
+                                bufferedVoice = existing + " " + voice
+                            } else {
+                                bufferedVoice = voice
+                            }
+                            combineTimer?.cancel()
+                            combineTimer = Task { @MainActor in
+                                try? await Task.sleep(for: .milliseconds(combineWindowMs))
+                                guard !Task.isCancelled else { return }
+                                if let voice = bufferedVoice {
+                                    agent.feedUserSpeech(text: voice)
+                                    bufferedVoice = nil
+                                }
+                                combineTimer = nil
+                            }
+                        }
+                    }
+                }
+            }
+
+            rl_callback_handler_remove()
+        }
+
+        // -- Wait for Ctrl+C --
         let signalSource = DispatchSource.makeSignalSource(signal: SIGINT, queue: .main)
         signal(SIGINT, SIG_IGN)
 
@@ -479,6 +645,10 @@ Start speaking! Press Ctrl+C to exit.
             signalSource.resume()
         }
 
+        // Cleanup
+        stdinReader.cancel()
+        micUnmuteTask?.cancel()
+        combineTimer?.cancel()
         print("\nGoodbye!")
         await audioCapture.stop()
 
