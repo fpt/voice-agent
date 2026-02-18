@@ -637,7 +637,7 @@ mod tests {
         let dir = std::env::temp_dir();
         let skill_reg = Arc::new(SkillRegistry::new());
         let situation = Arc::new(SituationMessages::default());
-        let registry = create_default_registry(dir, skill_reg, None, situation);
+        let registry = create_default_registry(dir, skill_reg, situation);
 
         let defs = registry.get_definitions();
         assert_eq!(defs.len(), 5);
