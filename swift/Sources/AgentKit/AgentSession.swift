@@ -259,23 +259,33 @@ public class AgentSession: @unchecked Sendable {
                 guard let self else { return }
 
                 let summaries = self.agent.drainWatcherSummaries()
-                for summary in summaries {
+                guard !summaries.isEmpty else { continue }
+
+                // Process high-priority (user speech) first so watcher events
+                // don't block/delay the user's response.
+                let high = summaries.filter { $0.priority == .high }
+                let normal = summaries.filter { $0.priority != .high }
+
+                for summary in high {
                     do {
-                        if summary.priority == .high {
-                            // User speech — process via step()
-                            let response = try self.step(summary.text)
-                            let text = self.formatResponse(response.content)
-                            self.onResponse?(text, summary.priority)
-                        } else {
-                            // Watcher event
-                            self.onWatcherSummary?(summary.text)
-                            let response = try self.chatOnce(
-                                input: "[System Event] \(summary.text)",
-                                skillName: "claude-activity-report"
-                            )
-                            let text = self.formatResponse(response)
-                            self.onResponse?(text, summary.priority)
-                        }
+                        let response = try self.step(summary.text)
+                        let text = self.formatResponse(response.content)
+                        self.onResponse?(text, summary.priority)
+                    } catch {
+                        self.onError?(error)
+                    }
+                }
+
+                for summary in normal {
+                    do {
+                        self.onWatcherSummary?(summary.text)
+                        let response = try self.chatOnce(
+                            input: "[System Event] \(summary.text)",
+                            skillName: "claude-activity-report"
+                        )
+                        let text = self.formatResponse(response)
+                        // Normal priority: print only, no TTS (avoids mic feedback loop)
+                        self.onResponse?(text, summary.priority)
                     } catch {
                         self.onError?(error)
                     }

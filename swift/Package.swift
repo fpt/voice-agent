@@ -14,7 +14,7 @@ let package = Package(
     targets: [
         .target(
             name: "AgentKit",
-            dependencies: ["Util", "AgentBridge", "TTS", "Watcher"],
+            dependencies: ["Util", "AgentBridge", "TTS", "Watcher", "ScreenCapture"],
             swiftSettings: [.swiftLanguageMode(.v5)]
         ),
         .executableTarget(
@@ -25,6 +25,7 @@ let package = Package(
                 "AgentBridge",
                 "CEditline",
                 "Audio",
+                "ScreenCapture",
             ],
             swiftSettings: [.swiftLanguageMode(.v5)]
         ),
@@ -48,6 +49,11 @@ let package = Package(
         .target(
             name: "Watcher",
             dependencies: ["Util"],
+            swiftSettings: [.swiftLanguageMode(.v5)]
+        ),
+        .target(
+            name: "ScreenCapture",
+            dependencies: [],
             swiftSettings: [.swiftLanguageMode(.v5)]
         ),
         .systemLibrary(

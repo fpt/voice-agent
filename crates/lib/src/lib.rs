@@ -1,3 +1,4 @@
+pub mod capture;
 pub mod event_router;
 mod harmony;
 mod llm;
@@ -20,6 +21,7 @@ use parking_lot::Mutex;
 use std::path::PathBuf;
 use std::sync::Arc;
 
+pub use capture::CaptureRequest;
 pub use event_router::{EventPriority, EventSummary};
 pub use harmony::HarmonyTemplate;
 pub use llm::{create_provider, ChatMessage, ChatRole};
@@ -143,6 +145,9 @@ pub struct Agent {
     skill_registry: Arc<skill::SkillRegistry>,
     event_router: Option<Arc<event_router::EventRouter>>,
     situation: Arc<situation::SituationMessages>,
+    capture_request_rx: crossbeam::channel::Receiver<capture::CaptureRequest>,
+    capture_result_tx: crossbeam::channel::Sender<capture::CaptureResult>,
+    find_result_tx: crossbeam::channel::Sender<capture::CaptureResult>,
 }
 
 // Top-level constructor function for UniFFI
@@ -189,12 +194,25 @@ pub fn agent_new(config: AgentConfig) -> Result<Arc<Agent>, AgentError> {
 
     let situation = Arc::new(situation::SituationMessages::default());
 
-    let tool_registry = tool::create_default_registry(
+    // Create capture bridge
+    let capture_bridge = capture::CaptureBridge::new();
+
+    let mut tool_registry = tool::create_default_registry(
         working_dir,
         skill_registry.clone(),
         event_router.clone(),
         situation.clone(),
     );
+
+    // Register capture + find_window tools (shared request channel, separate result channels)
+    tool_registry.register(Box::new(capture::CaptureScreenTool::new(
+        capture_bridge.request_tx.clone(),
+        capture_bridge.capture_result_rx.clone(),
+    )));
+    tool_registry.register(Box::new(capture::FindWindowTool::new(
+        capture_bridge.request_tx.clone(),
+        capture_bridge.find_result_rx.clone(),
+    )));
 
     Ok(Arc::new(Agent {
         config,
@@ -206,6 +224,9 @@ pub fn agent_new(config: AgentConfig) -> Result<Arc<Agent>, AgentError> {
         skill_registry,
         event_router,
         situation,
+        capture_request_rx: capture_bridge.request_rx,
+        capture_result_tx: capture_bridge.capture_result_tx,
+        find_result_tx: capture_bridge.find_result_tx,
     }))
 }
 
@@ -223,13 +244,7 @@ impl Agent {
         memory.update_state_capsule(updated_capsule);
 
         // Add user message to memory
-        memory.add_message(ChatMessage {
-            role: ChatRole::User,
-            content: user_input.clone(),
-            tool_calls: None,
-            tool_call_id: None,
-            tool_name: None,
-        });
+        memory.add_message(ChatMessage::user(user_input.clone()));
 
         // Get conversation context
         let mut messages = memory.get_messages();
@@ -237,43 +252,19 @@ impl Agent {
         // Prepend custom system prompt if set
         let system_prompt = self.system_prompt.lock().clone();
         if let Some(prompt) = system_prompt {
-            messages.insert(
-                0,
-                ChatMessage {
-                    role: ChatRole::System,
-                    content: prompt,
-                    tool_calls: None,
-                    tool_call_id: None,
-                    tool_name: None,
-                },
-            );
+            messages.insert(0, ChatMessage::system(prompt));
         }
 
         // Prepend state capsule as system message if not empty and after custom prompt
         let state_prompt = memory.get_state_prompt();
         if !state_prompt.is_empty() {
             let insert_pos = if self.system_prompt.lock().is_some() { 1 } else { 0 };
-            messages.insert(
-                insert_pos,
-                ChatMessage {
-                    role: ChatRole::System,
-                    content: state_prompt,
-                    tool_calls: None,
-                    tool_call_id: None,
-                    tool_name: None,
-                },
-            );
+            messages.insert(insert_pos, ChatMessage::system(state_prompt));
         }
 
         // Inject skill catalog so LLM knows what skills are available
         if let Some(catalog) = self.skill_registry.catalog() {
-            messages.push(ChatMessage {
-                role: ChatRole::System,
-                content: catalog,
-                tool_calls: None,
-                tool_call_id: None,
-                tool_name: None,
-            });
+            messages.push(ChatMessage::system(catalog));
         }
 
         // Apply Harmony template if enabled
@@ -316,13 +307,7 @@ impl Agent {
         };
 
         // Add assistant response to memory
-        memory.add_message(ChatMessage {
-            role: ChatRole::Assistant,
-            content: response_text.clone(),
-            tool_calls: None,
-            tool_call_id: None,
-            tool_name: None,
-        });
+        memory.add_message(ChatMessage::assistant(response_text.clone()));
 
         Ok(AgentResponse {
             content: response_text,
@@ -540,6 +525,40 @@ impl Agent {
             .add_message(ChatMessage::assistant(response.clone()));
 
         Ok(response)
+    }
+
+    /// Drain all pending capture requests (Swift polls this).
+    pub fn drain_capture_requests(&self) -> Vec<capture::CaptureRequest> {
+        let mut requests = Vec::new();
+        while let Ok(req) = self.capture_request_rx.try_recv() {
+            requests.push(req);
+        }
+        requests
+    }
+
+    /// Submit a capture result from Swift back to the waiting Rust tool.
+    /// Routes to the correct channel based on request ID prefix.
+    pub fn submit_capture_result(
+        &self,
+        id: String,
+        image_base64: String,
+        metadata_json: String,
+    ) {
+        let result = capture::CaptureResult {
+            id: id.clone(),
+            image_base64,
+            metadata_json,
+        };
+        if id.starts_with("find_") {
+            let _ = self.find_result_tx.send(result);
+        } else {
+            let _ = self.capture_result_tx.send(result);
+        }
+    }
+
+    /// Push a situation message from Swift (e.g. periodic window list).
+    pub fn push_situation_message(&self, text: String, source: String, session_id: String) {
+        self.situation.push(text, source, session_id);
     }
 }
 

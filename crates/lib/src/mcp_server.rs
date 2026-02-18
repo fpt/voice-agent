@@ -163,9 +163,9 @@ impl<'a> McpServer<'a> {
         };
 
         match self.tools.call(&call_params.name, call_params.arguments) {
-            Ok(text) => {
+            Ok(tool_result) => {
                 let result = ToolsCallResult {
-                    content: vec![ToolContent::Text { text }],
+                    content: vec![ToolContent::Text { text: tool_result.text }],
                     is_error: None,
                 };
                 JsonRpcResponse::success(id, serde_json::to_value(result).unwrap())

@@ -15,11 +15,21 @@ pub enum ChatRole {
     Tool,
 }
 
+/// Image content for multimodal messages
+#[derive(Debug, Clone)]
+pub struct ImageContent {
+    pub base64: String,
+    pub media_type: String, // "image/png", "image/jpeg"
+}
+
 /// Chat message
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ChatMessage {
     pub role: ChatRole,
     pub content: String,
+    /// Images attached to this message (for vision models)
+    #[serde(skip)]
+    pub images: Vec<ImageContent>,
     /// Tool calls made by assistant (set by ReAct loop)
     #[serde(skip)]
     pub tool_calls: Option<Vec<ToolCallInfo>>,
@@ -36,6 +46,7 @@ impl ChatMessage {
         Self {
             role: ChatRole::User,
             content,
+            images: vec![],
             tool_calls: None,
             tool_call_id: None,
             tool_name: None,
@@ -46,6 +57,7 @@ impl ChatMessage {
         Self {
             role: ChatRole::Assistant,
             content,
+            images: vec![],
             tool_calls: None,
             tool_call_id: None,
             tool_name: None,
@@ -56,6 +68,7 @@ impl ChatMessage {
         Self {
             role: ChatRole::System,
             content,
+            images: vec![],
             tool_calls: None,
             tool_call_id: None,
             tool_name: None,
@@ -66,6 +79,7 @@ impl ChatMessage {
         Self {
             role: ChatRole::Assistant,
             content: String::new(),
+            images: vec![],
             tool_calls: Some(calls),
             tool_call_id: None,
             tool_name: None,
@@ -76,6 +90,23 @@ impl ChatMessage {
         Self {
             role: ChatRole::Tool,
             content,
+            images: vec![],
+            tool_calls: None,
+            tool_call_id: Some(call_id),
+            tool_name: Some(name),
+        }
+    }
+
+    pub fn tool_result_with_images(
+        call_id: String,
+        name: String,
+        content: String,
+        images: Vec<ImageContent>,
+    ) -> Self {
+        Self {
+            role: ChatRole::Tool,
+            content,
+            images,
             tool_calls: None,
             tool_call_id: Some(call_id),
             tool_name: Some(name),
@@ -162,7 +193,10 @@ pub trait LlmProvider: Send + Sync {
 #[serde(tag = "type")]
 enum ResponsesInputItem {
     #[serde(rename = "message")]
-    Message { role: String, content: String },
+    Message {
+        role: String,
+        content: serde_json::Value,
+    },
     #[serde(rename = "function_call")]
     FunctionCall {
         call_id: String,
@@ -277,6 +311,7 @@ pub struct OpenAiProvider {
     temperature: Option<f32>,
     max_tokens: u32,
     reasoning_effort: Option<String>,
+    http_agent: ureq::Agent,
 }
 
 impl OpenAiProvider {
@@ -345,12 +380,32 @@ impl OpenAiProvider {
         tracing::info!("  Model: {}", model);
         tracing::info!("  Reasoning effort: {:?}", reasoning_effort);
 
+        let http_agent = if let Ok(cert_file) = std::env::var("SSL_CERT_FILE") {
+            tracing::info!("Loading custom CA certificates from: {}", cert_file);
+            match Self::build_tls_with_custom_ca(&cert_file) {
+                Ok(tls) => {
+                    tracing::info!("Custom CA certificates loaded successfully");
+                    ureq::AgentBuilder::new()
+                        .tls_connector(std::sync::Arc::new(tls))
+                        .build()
+                }
+                Err(e) => {
+                    tracing::error!("Failed to load custom CA certificates: {}", e);
+                    tracing::warn!("Falling back to default TLS configuration");
+                    ureq::agent()
+                }
+            }
+        } else {
+            ureq::agent()
+        };
+
         Self {
             api_key,
             model,
             temperature,
             max_tokens,
             reasoning_effort,
+            http_agent,
         }
     }
 
@@ -381,10 +436,32 @@ impl OpenAiProvider {
 
                 // Handle tool result messages
                 if let Some(ref call_id) = msg.tool_call_id {
-                    return vec![ResponsesInputItem::FunctionCallOutput {
+                    let mut items = vec![ResponsesInputItem::FunctionCallOutput {
                         call_id: call_id.clone(),
                         output: msg.content.clone(),
                     }];
+                    // function_call_output only accepts string; send images as
+                    // a follow-up user message so the LLM can actually see them.
+                    if !msg.images.is_empty() {
+                        let mut parts = vec![serde_json::json!({
+                            "type": "input_text",
+                            "text": format!("[Screenshot from tool '{}']",
+                                msg.tool_name.as_deref().unwrap_or("unknown")),
+                        })];
+                        for img in &msg.images {
+                            let data_url =
+                                format!("data:{};base64,{}", img.media_type, img.base64);
+                            parts.push(serde_json::json!({
+                                "type": "input_image",
+                                "image_url": data_url,
+                            }));
+                        }
+                        items.push(ResponsesInputItem::Message {
+                            role: "user".to_string(),
+                            content: serde_json::Value::Array(parts),
+                        });
+                    }
+                    return items;
                 }
 
                 // Regular message
@@ -395,9 +472,28 @@ impl OpenAiProvider {
                     ChatRole::Tool => return vec![], // Handled above via tool_call_id
                 };
 
+                // Build content: array with images if present, plain string otherwise
+                let content = if msg.images.is_empty() {
+                    serde_json::Value::String(msg.content.clone())
+                } else {
+                    let mut parts = vec![serde_json::json!({
+                        "type": "input_text",
+                        "text": msg.content,
+                    })];
+                    for img in &msg.images {
+                        let data_url =
+                            format!("data:{};base64,{}", img.media_type, img.base64);
+                        parts.push(serde_json::json!({
+                            "type": "input_image",
+                            "image_url": data_url,
+                        }));
+                    }
+                    serde_json::Value::Array(parts)
+                };
+
                 vec![ResponsesInputItem::Message {
                     role: role.to_string(),
-                    content: msg.content.clone(),
+                    content,
                 }]
             })
             .collect()
@@ -425,27 +521,7 @@ impl OpenAiProvider {
         tracing::debug!("Sending request to OpenAI Responses API");
         tracing::debug!("Model: {}", self.model);
 
-        // Configure TLS with custom CA certificates if provided
-        let agent = if let Ok(cert_file) = std::env::var("SSL_CERT_FILE") {
-            tracing::info!("Loading custom CA certificates from: {}", cert_file);
-            match Self::build_tls_with_custom_ca(&cert_file) {
-                Ok(tls) => {
-                    tracing::info!("Custom CA certificates loaded successfully");
-                    ureq::AgentBuilder::new()
-                        .tls_connector(std::sync::Arc::new(tls))
-                        .build()
-                }
-                Err(e) => {
-                    tracing::error!("Failed to load custom CA certificates: {}", e);
-                    tracing::warn!("Falling back to default TLS configuration");
-                    ureq::agent()
-                }
-            }
-        } else {
-            ureq::agent()
-        };
-
-        let response_result = agent.post(url)
+        let response_result = self.http_agent.post(url)
             .set("Content-Type", "application/json")
             .set("Authorization", &auth_header)
             .send_json(request);
@@ -733,6 +809,175 @@ pub fn create_provider(
         )))
     } else {
         anyhow::bail!("No model_path or api_key provided. Set MODEL_PATH for local inference or OPENAI_API_KEY for cloud.");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_convert_user_message_plain() {
+        let msgs = vec![ChatMessage::user("hello".to_string())];
+        let items = OpenAiProvider::convert_to_input_items(&msgs);
+
+        assert_eq!(items.len(), 1);
+        let json = serde_json::to_value(&items[0]).unwrap();
+        assert_eq!(json["type"], "message");
+        assert_eq!(json["role"], "user");
+        assert_eq!(json["content"], "hello");
+    }
+
+    #[test]
+    fn test_convert_user_message_with_images() {
+        let mut msg = ChatMessage::user("describe this".to_string());
+        msg.images = vec![ImageContent {
+            base64: "AAAA".to_string(),
+            media_type: "image/png".to_string(),
+        }];
+
+        let items = OpenAiProvider::convert_to_input_items(&[msg]);
+
+        assert_eq!(items.len(), 1);
+        let json = serde_json::to_value(&items[0]).unwrap();
+        assert_eq!(json["type"], "message");
+        assert_eq!(json["role"], "user");
+
+        let content = json["content"].as_array().unwrap();
+        assert_eq!(content.len(), 2);
+        assert_eq!(content[0]["type"], "input_text");
+        assert_eq!(content[0]["text"], "describe this");
+        assert_eq!(content[1]["type"], "input_image");
+        assert_eq!(content[1]["image_url"], "data:image/png;base64,AAAA");
+    }
+
+    #[test]
+    fn test_convert_tool_result_without_images() {
+        let msg = ChatMessage::tool_result(
+            "call_1".to_string(),
+            "my_tool".to_string(),
+            "result text".to_string(),
+        );
+
+        let items = OpenAiProvider::convert_to_input_items(&[msg]);
+
+        assert_eq!(items.len(), 1);
+        let json = serde_json::to_value(&items[0]).unwrap();
+        assert_eq!(json["type"], "function_call_output");
+        assert_eq!(json["call_id"], "call_1");
+        assert_eq!(json["output"], "result text");
+    }
+
+    #[test]
+    fn test_convert_tool_result_with_images_emits_two_items() {
+        let msg = ChatMessage::tool_result_with_images(
+            "call_42".to_string(),
+            "capture_screen".to_string(),
+            "Window: Chrome, Size: 1920x1080".to_string(),
+            vec![ImageContent {
+                base64: "iVBORw0KGgo=".to_string(),
+                media_type: "image/png".to_string(),
+            }],
+        );
+
+        let items = OpenAiProvider::convert_to_input_items(&[msg]);
+
+        // Should produce 2 items: function_call_output + user message with image
+        assert_eq!(items.len(), 2, "Expected 2 items: function_call_output + image message");
+
+        // First: the function output (text only)
+        let fco = serde_json::to_value(&items[0]).unwrap();
+        assert_eq!(fco["type"], "function_call_output");
+        assert_eq!(fco["call_id"], "call_42");
+        assert_eq!(fco["output"], "Window: Chrome, Size: 1920x1080");
+
+        // Second: user message with the image
+        let img_msg = serde_json::to_value(&items[1]).unwrap();
+        assert_eq!(img_msg["type"], "message");
+        assert_eq!(img_msg["role"], "user");
+
+        let content = img_msg["content"].as_array().unwrap();
+        assert_eq!(content.len(), 2);
+        assert_eq!(content[0]["type"], "input_text");
+        assert!(content[0]["text"].as_str().unwrap().contains("capture_screen"));
+        assert_eq!(content[1]["type"], "input_image");
+        assert_eq!(
+            content[1]["image_url"],
+            "data:image/png;base64,iVBORw0KGgo="
+        );
+    }
+
+    #[test]
+    fn test_convert_tool_result_with_multiple_images() {
+        let msg = ChatMessage::tool_result_with_images(
+            "call_99".to_string(),
+            "multi_capture".to_string(),
+            "Two screenshots".to_string(),
+            vec![
+                ImageContent {
+                    base64: "IMG1".to_string(),
+                    media_type: "image/png".to_string(),
+                },
+                ImageContent {
+                    base64: "IMG2".to_string(),
+                    media_type: "image/jpeg".to_string(),
+                },
+            ],
+        );
+
+        let items = OpenAiProvider::convert_to_input_items(&[msg]);
+        assert_eq!(items.len(), 2);
+
+        let img_msg = serde_json::to_value(&items[1]).unwrap();
+        let content = img_msg["content"].as_array().unwrap();
+        // 1 text + 2 images = 3 parts
+        assert_eq!(content.len(), 3);
+        assert_eq!(content[1]["image_url"], "data:image/png;base64,IMG1");
+        assert_eq!(content[2]["image_url"], "data:image/jpeg;base64,IMG2");
+    }
+
+    #[test]
+    fn test_convert_full_tool_call_roundtrip() {
+        // Simulate: user asks -> assistant calls tool -> tool returns with image -> messages
+        let msgs = vec![
+            ChatMessage::user("capture Chrome".to_string()),
+            ChatMessage::assistant_tool_calls(vec![ToolCallInfo {
+                id: "call_1".to_string(),
+                name: "capture_screen".to_string(),
+                arguments: serde_json::json!({"process_name": "Chrome"}),
+            }]),
+            ChatMessage::tool_result_with_images(
+                "call_1".to_string(),
+                "capture_screen".to_string(),
+                "Window: Chrome".to_string(),
+                vec![ImageContent {
+                    base64: "SCREENSHOT".to_string(),
+                    media_type: "image/png".to_string(),
+                }],
+            ),
+        ];
+
+        let items = OpenAiProvider::convert_to_input_items(&msgs);
+
+        // user message + function_call + function_call_output + image message = 4
+        assert_eq!(items.len(), 4);
+
+        let json: Vec<_> = items.iter().map(|i| serde_json::to_value(i).unwrap()).collect();
+
+        assert_eq!(json[0]["type"], "message");
+        assert_eq!(json[0]["role"], "user");
+
+        assert_eq!(json[1]["type"], "function_call");
+        assert_eq!(json[1]["name"], "capture_screen");
+
+        assert_eq!(json[2]["type"], "function_call_output");
+        assert_eq!(json[2]["output"], "Window: Chrome");
+
+        assert_eq!(json[3]["type"], "message");
+        assert_eq!(json[3]["role"], "user");
+        let content = json[3]["content"].as_array().unwrap();
+        assert_eq!(content[1]["type"], "input_image");
+        assert!(content[1]["image_url"].as_str().unwrap().contains("SCREENSHOT"));
     }
 }
 

@@ -23,6 +23,8 @@ public class AudioCapture {
     private var resultsTask: Task<Void, any Error>?
     private var isRunning = false
     nonisolated(unsafe) private var _muted = false
+    /// Incremented on each mute(). Results from before the latest mute are discarded.
+    nonisolated(unsafe) private var _muteGeneration: UInt64 = 0
 
     // Callbacks
     public var onVolatileResult: ((String) -> Void)?
@@ -112,16 +114,19 @@ public class AudioCapture {
         logger.info("SpeechTranscriber initialized successfully")
     }
 
-    /// Mute audio capture (drop buffers instead of feeding to transcriber)
+    /// Mute audio capture (drop buffers and discard in-flight transcription results)
     public func mute() {
         _muted = true
-        logger.debug("Audio capture muted")
+        _muteGeneration &+= 1
+        logger.debug("Audio capture muted (gen \(_muteGeneration))")
     }
 
-    /// Unmute audio capture
+    /// Unmute audio capture.
+    /// Bumps generation again so in-flight results from the muted period are discarded.
     public func unmute() {
+        _muteGeneration &+= 1
         _muted = false
-        logger.debug("Audio capture unmuted")
+        logger.debug("Audio capture unmuted (gen \(_muteGeneration))")
     }
 
     /// Request microphone permission
@@ -176,14 +181,27 @@ public class AudioCapture {
         // Start analyzer
         try await analyzer.start(inputSequence: inputSequence)
 
-        // Start consuming results
+        // Start consuming results — discard anything delivered while muted
+        // or shortly after unmute (in-flight results from pre-mute audio).
         resultsTask = Task {
             for try await result in transcriber.results {
+                // Capture mute state before async dispatch to MainActor
+                let muted = self._muted
+                if muted { continue }
+
                 let text = String(result.text.characters)
+                let gen = self._muteGeneration
                 if result.isFinal {
-                    await MainActor.run { self.onFinalResult?(text) }
+                    await MainActor.run {
+                        // Double-check: generation unchanged means no mute/unmute happened
+                        guard self._muteGeneration == gen, !self._muted else { return }
+                        self.onFinalResult?(text)
+                    }
                 } else {
-                    await MainActor.run { self.onVolatileResult?(text) }
+                    await MainActor.run {
+                        guard self._muteGeneration == gen, !self._muted else { return }
+                        self.onVolatileResult?(text)
+                    }
                 }
             }
         }

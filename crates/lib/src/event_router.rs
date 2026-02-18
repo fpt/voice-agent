@@ -481,12 +481,12 @@ impl ToolHandler for ReportEventTool {
         })
     }
 
-    fn call(&self, args: serde_json::Value) -> Result<String, AgentError> {
+    fn call(&self, args: serde_json::Value) -> Result<crate::tool::ToolResult, AgentError> {
         let event: WatcherEvent = serde_json::from_value(args).map_err(|e| {
             AgentError::ParseError(format!("Invalid event: {}", e))
         })?;
         self.router.feed(event);
-        Ok("ok".to_string())
+        Ok(crate::tool::ToolResult::text("ok".to_string()))
     }
 }
 
@@ -690,7 +690,7 @@ mod tests {
                 "file_path": "/tmp/test.rs"
             }))
             .unwrap();
-        assert_eq!(result, "ok");
+        assert_eq!(result.text, "ok");
 
         // Wait for debounce and check summary
         std::thread::sleep(Duration::from_millis(300));

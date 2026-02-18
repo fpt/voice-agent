@@ -2,17 +2,43 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use crate::event_router::{EventRouter, ReportEventTool};
-use crate::llm::ToolDefinition;
+use crate::llm::{ImageContent, ToolDefinition};
 use crate::situation::{ReadSituationMessagesTool, SituationMessages};
 use crate::skill::{SkillLookupTool, SkillRegistry};
 use crate::AgentError;
+
+/// Result of a tool call, containing text and optional images
+#[derive(Debug)]
+pub struct ToolResult {
+    pub text: String,
+    pub images: Vec<ImageContent>,
+}
+
+impl ToolResult {
+    pub fn text(s: String) -> Self {
+        Self {
+            text: s,
+            images: vec![],
+        }
+    }
+
+    pub fn with_images(text: String, images: Vec<ImageContent>) -> Self {
+        Self { text, images }
+    }
+}
+
+impl From<String> for ToolResult {
+    fn from(s: String) -> Self {
+        Self::text(s)
+    }
+}
 
 /// Trait for tool implementations
 pub trait ToolHandler: Send + Sync {
     fn name(&self) -> &str;
     fn description(&self) -> &str;
     fn parameters_schema(&self) -> serde_json::Value;
-    fn call(&self, args: serde_json::Value) -> Result<String, AgentError>;
+    fn call(&self, args: serde_json::Value) -> Result<ToolResult, AgentError>;
 
     /// Optional dynamic description that can change at runtime (e.g. include live stats).
     /// When `Some`, this overrides `description()` in tool definitions sent to the LLM.
@@ -24,7 +50,7 @@ pub trait ToolHandler: Send + Sync {
 /// Trait for accessing tools (implemented by both ToolRegistry and FilteredToolRegistry)
 pub trait ToolAccess {
     fn get_definitions(&self) -> Vec<ToolDefinition>;
-    fn call(&self, name: &str, args: serde_json::Value) -> Result<String, AgentError>;
+    fn call(&self, name: &str, args: serde_json::Value) -> Result<ToolResult, AgentError>;
     fn is_empty(&self) -> bool;
 }
 
@@ -66,7 +92,7 @@ impl ToolAccess for ToolRegistry {
             .collect()
     }
 
-    fn call(&self, name: &str, args: serde_json::Value) -> Result<String, AgentError> {
+    fn call(&self, name: &str, args: serde_json::Value) -> Result<ToolResult, AgentError> {
         let tool = self
             .tools
             .iter()
@@ -75,7 +101,7 @@ impl ToolAccess for ToolRegistry {
 
         tracing::info!("Calling tool: {} with args: {}", name, args);
         let result = tool.call(args)?;
-        tracing::debug!("Tool {} returned {} chars", name, result.len());
+        tracing::debug!("Tool {} returned {} chars", name, result.text.len());
         Ok(result)
     }
 
@@ -105,7 +131,7 @@ impl<'a> ToolAccess for FilteredToolRegistry<'a> {
             .collect()
     }
 
-    fn call(&self, name: &str, args: serde_json::Value) -> Result<String, AgentError> {
+    fn call(&self, name: &str, args: serde_json::Value) -> Result<ToolResult, AgentError> {
         if !self.allowed.iter().any(|a| a == name) {
             return Err(AgentError::InternalError(format!("Tool not allowed: {}", name)));
         }
@@ -117,7 +143,7 @@ impl<'a> ToolAccess for FilteredToolRegistry<'a> {
 
         tracing::info!("Calling tool: {} with args: {}", name, args);
         let result = tool.call(args)?;
-        tracing::debug!("Tool {} returned {} chars", name, result.len());
+        tracing::debug!("Tool {} returned {} chars", name, result.text.len());
         Ok(result)
     }
 
@@ -198,7 +224,7 @@ impl ToolHandler for ReadTool {
         })
     }
 
-    fn call(&self, args: serde_json::Value) -> Result<String, AgentError> {
+    fn call(&self, args: serde_json::Value) -> Result<ToolResult, AgentError> {
         let file_path = args["file_path"]
             .as_str()
             .ok_or_else(|| AgentError::ParseError("Missing file_path argument".to_string()))?;
@@ -232,7 +258,7 @@ impl ToolHandler for ReadTool {
             ));
         }
 
-        Ok(output)
+        Ok(ToolResult::text(output))
     }
 }
 
@@ -276,7 +302,7 @@ impl ToolHandler for GlobTool {
         })
     }
 
-    fn call(&self, args: serde_json::Value) -> Result<String, AgentError> {
+    fn call(&self, args: serde_json::Value) -> Result<ToolResult, AgentError> {
         let pattern = args["pattern"]
             .as_str()
             .ok_or_else(|| AgentError::ParseError("Missing pattern argument".to_string()))?;
@@ -304,7 +330,6 @@ impl ToolHandler for GlobTool {
         for entry in entries {
             match entry {
                 Ok(path) => {
-                    // Show relative paths when possible
                     let display = path
                         .strip_prefix(&self.working_dir)
                         .unwrap_or(&path)
@@ -321,12 +346,12 @@ impl ToolHandler for GlobTool {
         matches.sort();
 
         if matches.is_empty() {
-            Ok(format!("No files found matching '{}'", pattern))
+            Ok(ToolResult::text(format!("No files found matching '{}'", pattern)))
         } else {
             let count = matches.len();
             let mut output = matches.join("\n");
             output.push_str(&format!("\n\n({} files found)", count));
-            Ok(output)
+            Ok(ToolResult::text(output))
         }
     }
 }
@@ -397,7 +422,7 @@ impl ToolHandler for TaskTool {
         })
     }
 
-    fn call(&self, args: serde_json::Value) -> Result<String, AgentError> {
+    fn call(&self, args: serde_json::Value) -> Result<ToolResult, AgentError> {
         let action = args["action"]
             .as_str()
             .ok_or_else(|| AgentError::ParseError("Missing action argument".to_string()))?;
@@ -431,7 +456,7 @@ impl ToolHandler for TaskTool {
                 };
                 tasks.push(task);
 
-                Ok(format!("Created task #{}: {}", id, subject))
+                Ok(ToolResult::text(format!("Created task #{}: {}", id, subject)))
             }
             "update" => {
                 let task_id = args["task_id"]
@@ -454,10 +479,10 @@ impl ToolHandler for TaskTool {
                     })?;
 
                 task.status = new_status.to_string();
-                Ok(format!(
+                Ok(ToolResult::text(format!(
                     "Updated task #{} '{}' → {}",
                     task_id, task.subject, new_status
-                ))
+                )))
             }
             "list" => {
                 let tasks = self.tasks.lock().map_err(|e| {
@@ -465,7 +490,7 @@ impl ToolHandler for TaskTool {
                 })?;
 
                 if tasks.is_empty() {
-                    return Ok("No tasks.".to_string());
+                    return Ok(ToolResult::text("No tasks.".to_string()));
                 }
 
                 let mut output = String::from("Tasks:\n");
@@ -483,7 +508,7 @@ impl ToolHandler for TaskTool {
                         output.push_str(&format!("       {}\n", task.description));
                     }
                 }
-                Ok(output)
+                Ok(ToolResult::text(output))
             }
             _ => Err(AgentError::ParseError(format!(
                 "Unknown action: {}. Use 'create', 'update', or 'list'.",
@@ -512,7 +537,8 @@ mod tests {
             .call(serde_json::json!({
                 "file_path": file.path().to_string_lossy().to_string()
             }))
-            .unwrap();
+            .unwrap()
+            .text;
 
         assert!(result.contains("line one"));
         assert!(result.contains("line two"));
@@ -537,7 +563,8 @@ mod tests {
                 "offset": 3,
                 "limit": 2
             }))
-            .unwrap();
+            .unwrap()
+            .text;
 
         assert!(result.contains("line 3"));
         assert!(result.contains("line 4"));
@@ -557,7 +584,8 @@ mod tests {
             .call(serde_json::json!({
                 "pattern": "*.txt"
             }))
-            .unwrap();
+            .unwrap()
+            .text;
 
         assert!(result.contains("test.txt"));
         assert!(!result.contains("test.rs"));
@@ -577,14 +605,16 @@ mod tests {
                 "subject": "Fix bug",
                 "description": "Fix the audio bug"
             }))
-            .unwrap();
+            .unwrap()
+            .text;
         assert!(result.contains("#1"));
         assert!(result.contains("Fix bug"));
 
         // List
         let result = tool
             .call(serde_json::json!({ "action": "list" }))
-            .unwrap();
+            .unwrap()
+            .text;
         assert!(result.contains("Fix bug"));
         assert!(result.contains("pending"));
 
@@ -595,13 +625,15 @@ mod tests {
                 "task_id": 1,
                 "status": "completed"
             }))
-            .unwrap();
+            .unwrap()
+            .text;
         assert!(result.contains("completed"));
 
         // List again
         let result = tool
             .call(serde_json::json!({ "action": "list" }))
-            .unwrap();
+            .unwrap()
+            .text;
         assert!(result.contains("[x]"));
     }
 

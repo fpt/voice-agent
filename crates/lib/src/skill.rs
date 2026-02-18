@@ -114,20 +114,20 @@ impl ToolHandler for SkillLookupTool {
         })
     }
 
-    fn call(&self, args: serde_json::Value) -> Result<String, AgentError> {
+    fn call(&self, args: serde_json::Value) -> Result<crate::tool::ToolResult, AgentError> {
         let action = args["action"]
             .as_str()
             .ok_or_else(|| AgentError::ParseError("Missing 'action' field".to_string()))?;
 
         match action {
-            "list" => Ok(self.registry.list()),
+            "list" => Ok(crate::tool::ToolResult::text(self.registry.list())),
             "get" => {
                 let name = args["name"]
                     .as_str()
                     .ok_or_else(|| AgentError::ParseError("Missing 'name' field for 'get' action".to_string()))?;
                 match self.registry.get(name) {
-                    Some(prompt) => Ok(format!("## Skill: {}\n\n{}", name, prompt)),
-                    None => Ok(format!("Skill '{}' not found. Use action 'list' to see available skills.", name)),
+                    Some(prompt) => Ok(crate::tool::ToolResult::text(format!("## Skill: {}\n\n{}", name, prompt))),
+                    None => Ok(crate::tool::ToolResult::text(format!("Skill '{}' not found. Use action 'list' to see available skills.", name))),
                 }
             }
             _ => Err(AgentError::ParseError(format!("Unknown action: {}", action))),
@@ -171,15 +171,15 @@ mod tests {
         let tool = SkillLookupTool::new(registry);
 
         // List
-        let result = tool.call(serde_json::json!({"action": "list"})).unwrap();
+        let result = tool.call(serde_json::json!({"action": "list"})).unwrap().text;
         assert!(result.contains("greeting"));
 
         // Get existing
-        let result = tool.call(serde_json::json!({"action": "get", "name": "greeting"})).unwrap();
+        let result = tool.call(serde_json::json!({"action": "get", "name": "greeting"})).unwrap().text;
         assert!(result.contains("Say hello warmly."));
 
         // Get nonexistent
-        let result = tool.call(serde_json::json!({"action": "get", "name": "nope"})).unwrap();
+        let result = tool.call(serde_json::json!({"action": "get", "name": "nope"})).unwrap().text;
         assert!(result.contains("not found"));
     }
 }

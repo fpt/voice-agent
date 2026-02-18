@@ -249,8 +249,8 @@ impl ToolHandler for McpHttpRemoteTool {
         self.info.input_schema.clone()
     }
 
-    fn call(&self, args: serde_json::Value) -> Result<String, AgentError> {
-        self.client.call_tool(&self.info.name, args)
+    fn call(&self, args: serde_json::Value) -> Result<crate::tool::ToolResult, AgentError> {
+        self.client.call_tool(&self.info.name, args).map(crate::tool::ToolResult::text)
     }
 }
 
@@ -320,7 +320,8 @@ mod tests {
         // Call through ToolHandler interface
         let result = handlers[0]
             .call(serde_json::json!({"action": "list"}))
-            .unwrap();
+            .unwrap()
+            .text;
         assert!(result.contains("No tasks"));
     }
 

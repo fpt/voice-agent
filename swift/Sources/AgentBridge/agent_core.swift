@@ -534,6 +534,8 @@ public protocol AgentProtocol : AnyObject {
     
     func chatOnce(input: String, skillName: String?) throws  -> String
     
+    func drainCaptureRequests()  -> [CaptureRequest]
+    
     func drainWatcherSummaries()  -> [EventSummary]
     
     func feedUserSpeech(text: String) 
@@ -544,6 +546,8 @@ public protocol AgentProtocol : AnyObject {
     
     func processBackchannel(partialInput: String, pauseMs: UInt64)  -> String?
     
+    func pushSituationMessage(text: String, source: String, sessionId: String) 
+    
     func reset() 
     
     func setSystemPrompt(prompt: String) 
@@ -551,6 +555,8 @@ public protocol AgentProtocol : AnyObject {
     func step(userInput: String) throws  -> AgentResponse
     
     func stepWithAllowedTools(userInput: String, allowedTools: [String]) throws  -> AgentResponse
+    
+    func submitCaptureResult(id: String, imageBase64: String, metadataJson: String) 
     
 }
 
@@ -622,6 +628,13 @@ open func chatOnce(input: String, skillName: String?)throws  -> String {
 })
 }
     
+open func drainCaptureRequests() -> [CaptureRequest] {
+    return try!  FfiConverterSequenceTypeCaptureRequest.lift(try! rustCall() {
+    uniffi_agent_core_fn_method_agent_drain_capture_requests(self.uniffiClonePointer(),$0
+    )
+})
+}
+    
 open func drainWatcherSummaries() -> [EventSummary] {
     return try!  FfiConverterSequenceTypeEventSummary.lift(try! rustCall() {
     uniffi_agent_core_fn_method_agent_drain_watcher_summaries(self.uniffiClonePointer(),$0
@@ -659,6 +672,15 @@ open func processBackchannel(partialInput: String, pauseMs: UInt64) -> String? {
 })
 }
     
+open func pushSituationMessage(text: String, source: String, sessionId: String) {try! rustCall() {
+    uniffi_agent_core_fn_method_agent_push_situation_message(self.uniffiClonePointer(),
+        FfiConverterString.lower(text),
+        FfiConverterString.lower(source),
+        FfiConverterString.lower(sessionId),$0
+    )
+}
+}
+    
 open func reset() {try! rustCall() {
     uniffi_agent_core_fn_method_agent_reset(self.uniffiClonePointer(),$0
     )
@@ -687,6 +709,15 @@ open func stepWithAllowedTools(userInput: String, allowedTools: [String])throws 
         FfiConverterSequenceString.lower(allowedTools),$0
     )
 })
+}
+    
+open func submitCaptureResult(id: String, imageBase64: String, metadataJson: String) {try! rustCall() {
+    uniffi_agent_core_fn_method_agent_submit_capture_result(self.uniffiClonePointer(),
+        FfiConverterString.lower(id),
+        FfiConverterString.lower(imageBase64),
+        FfiConverterString.lower(metadataJson),$0
+    )
+}
 }
     
 
@@ -972,6 +1003,136 @@ public func FfiConverterTypeAgentResponse_lower(_ value: AgentResponse) -> RustB
 }
 
 
+public struct CaptureRequest {
+    public var id: String
+    public var windowName: String?
+    public var processName: String?
+    public var cropX: Double?
+    public var cropY: Double?
+    public var cropW: Double?
+    public var cropH: Double?
+    public var ocr: Bool?
+    public var detect: Bool?
+    public var searchKeywords: String?
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(id: String, windowName: String?, processName: String?, cropX: Double?, cropY: Double?, cropW: Double?, cropH: Double?, ocr: Bool?, detect: Bool?, searchKeywords: String?) {
+        self.id = id
+        self.windowName = windowName
+        self.processName = processName
+        self.cropX = cropX
+        self.cropY = cropY
+        self.cropW = cropW
+        self.cropH = cropH
+        self.ocr = ocr
+        self.detect = detect
+        self.searchKeywords = searchKeywords
+    }
+}
+
+
+
+extension CaptureRequest: Equatable, Hashable {
+    public static func ==(lhs: CaptureRequest, rhs: CaptureRequest) -> Bool {
+        if lhs.id != rhs.id {
+            return false
+        }
+        if lhs.windowName != rhs.windowName {
+            return false
+        }
+        if lhs.processName != rhs.processName {
+            return false
+        }
+        if lhs.cropX != rhs.cropX {
+            return false
+        }
+        if lhs.cropY != rhs.cropY {
+            return false
+        }
+        if lhs.cropW != rhs.cropW {
+            return false
+        }
+        if lhs.cropH != rhs.cropH {
+            return false
+        }
+        if lhs.ocr != rhs.ocr {
+            return false
+        }
+        if lhs.detect != rhs.detect {
+            return false
+        }
+        if lhs.searchKeywords != rhs.searchKeywords {
+            return false
+        }
+        return true
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(id)
+        hasher.combine(windowName)
+        hasher.combine(processName)
+        hasher.combine(cropX)
+        hasher.combine(cropY)
+        hasher.combine(cropW)
+        hasher.combine(cropH)
+        hasher.combine(ocr)
+        hasher.combine(detect)
+        hasher.combine(searchKeywords)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeCaptureRequest: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> CaptureRequest {
+        return
+            try CaptureRequest(
+                id: FfiConverterString.read(from: &buf), 
+                windowName: FfiConverterOptionString.read(from: &buf), 
+                processName: FfiConverterOptionString.read(from: &buf), 
+                cropX: FfiConverterOptionDouble.read(from: &buf), 
+                cropY: FfiConverterOptionDouble.read(from: &buf), 
+                cropW: FfiConverterOptionDouble.read(from: &buf), 
+                cropH: FfiConverterOptionDouble.read(from: &buf), 
+                ocr: FfiConverterOptionBool.read(from: &buf), 
+                detect: FfiConverterOptionBool.read(from: &buf), 
+                searchKeywords: FfiConverterOptionString.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: CaptureRequest, into buf: inout [UInt8]) {
+        FfiConverterString.write(value.id, into: &buf)
+        FfiConverterOptionString.write(value.windowName, into: &buf)
+        FfiConverterOptionString.write(value.processName, into: &buf)
+        FfiConverterOptionDouble.write(value.cropX, into: &buf)
+        FfiConverterOptionDouble.write(value.cropY, into: &buf)
+        FfiConverterOptionDouble.write(value.cropW, into: &buf)
+        FfiConverterOptionDouble.write(value.cropH, into: &buf)
+        FfiConverterOptionBool.write(value.ocr, into: &buf)
+        FfiConverterOptionBool.write(value.detect, into: &buf)
+        FfiConverterOptionString.write(value.searchKeywords, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeCaptureRequest_lift(_ buf: RustBuffer) throws -> CaptureRequest {
+    return try FfiConverterTypeCaptureRequest.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeCaptureRequest_lower(_ value: CaptureRequest) -> RustBuffer {
+    return FfiConverterTypeCaptureRequest.lower(value)
+}
+
+
 public struct EventSummary {
     public var text: String
     public var priority: EventPriority
@@ -1231,6 +1392,30 @@ fileprivate struct FfiConverterOptionDouble: FfiConverterRustBuffer {
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
+fileprivate struct FfiConverterOptionBool: FfiConverterRustBuffer {
+    typealias SwiftType = Bool?
+
+    public static func write(_ value: SwiftType, into buf: inout [UInt8]) {
+        guard let value = value else {
+            writeInt(&buf, Int8(0))
+            return
+        }
+        writeInt(&buf, Int8(1))
+        FfiConverterBool.write(value, into: &buf)
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SwiftType {
+        switch try readInt(&buf) as Int8 {
+        case 0: return nil
+        case 1: return try FfiConverterBool.read(from: &buf)
+        default: throw UniffiInternalError.unexpectedOptionalTag
+        }
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
 fileprivate struct FfiConverterOptionString: FfiConverterRustBuffer {
     typealias SwiftType = String?
 
@@ -1304,6 +1489,31 @@ fileprivate struct FfiConverterSequenceString: FfiConverterRustBuffer {
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
+fileprivate struct FfiConverterSequenceTypeCaptureRequest: FfiConverterRustBuffer {
+    typealias SwiftType = [CaptureRequest]
+
+    public static func write(_ value: [CaptureRequest], into buf: inout [UInt8]) {
+        let len = Int32(value.count)
+        writeInt(&buf, len)
+        for item in value {
+            FfiConverterTypeCaptureRequest.write(item, into: &buf)
+        }
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> [CaptureRequest] {
+        let len: Int32 = try readInt(&buf)
+        var seq = [CaptureRequest]()
+        seq.reserveCapacity(Int(len))
+        for _ in 0 ..< len {
+            seq.append(try FfiConverterTypeCaptureRequest.read(from: &buf))
+        }
+        return seq
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
 fileprivate struct FfiConverterSequenceTypeEventSummary: FfiConverterRustBuffer {
     typealias SwiftType = [EventSummary]
 
@@ -1357,6 +1567,9 @@ private var initializationResult: InitializationResult = {
     if (uniffi_agent_core_checksum_method_agent_chat_once() != 37266) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_agent_core_checksum_method_agent_drain_capture_requests() != 4180) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_agent_core_checksum_method_agent_drain_watcher_summaries() != 63735) {
         return InitializationResult.apiChecksumMismatch
     }
@@ -1372,6 +1585,9 @@ private var initializationResult: InitializationResult = {
     if (uniffi_agent_core_checksum_method_agent_process_backchannel() != 8364) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_agent_core_checksum_method_agent_push_situation_message() != 8206) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_agent_core_checksum_method_agent_reset() != 29830) {
         return InitializationResult.apiChecksumMismatch
     }
@@ -1382,6 +1598,9 @@ private var initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_agent_core_checksum_method_agent_step_with_allowed_tools() != 47034) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_agent_core_checksum_method_agent_submit_capture_result() != 24243) {
         return InitializationResult.apiChecksumMismatch
     }
 

@@ -278,8 +278,8 @@ impl ToolHandler for McpRemoteTool {
         self.info.input_schema.clone()
     }
 
-    fn call(&self, args: serde_json::Value) -> Result<String, AgentError> {
-        self.client.call_tool(&self.info.name, args)
+    fn call(&self, args: serde_json::Value) -> Result<crate::tool::ToolResult, AgentError> {
+        self.client.call_tool(&self.info.name, args).map(crate::tool::ToolResult::text)
     }
 }
 

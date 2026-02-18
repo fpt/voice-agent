@@ -49,13 +49,7 @@ impl ConversationMemory {
     /// This is for tempo tracking only - doesn't pollute context
     pub fn add_backchannel(&mut self) {
         self.messages.push(MessageEntry {
-            message: ChatMessage {
-                role: ChatRole::Assistant,
-                content: BACKCHANNEL_MARKER.to_string(),
-                tool_calls: None,
-                tool_call_id: None,
-                tool_name: None,
-            },
+            message: ChatMessage::assistant(BACKCHANNEL_MARKER.to_string()),
             is_backchannel: true,
         });
         self.trim_messages();

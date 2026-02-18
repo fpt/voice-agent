@@ -43,6 +43,19 @@ dictionary EventSummary {
     EventPriority priority;
 };
 
+dictionary CaptureRequest {
+    string id;
+    string? window_name;
+    string? process_name;
+    f64? crop_x;
+    f64? crop_y;
+    f64? crop_w;
+    f64? crop_h;
+    boolean? ocr;
+    boolean? detect;
+    string? search_keywords;
+};
+
 interface Agent {
     [Throws=AgentError]
     AgentResponse step(string user_input);
@@ -69,4 +82,10 @@ interface Agent {
 
     [Throws=AgentError]
     void feed_watcher_event(string json);
+
+    sequence<CaptureRequest> drain_capture_requests();
+
+    void submit_capture_result(string id, string image_base64, string metadata_json);
+
+    void push_situation_message(string text, string source, string session_id);
 };

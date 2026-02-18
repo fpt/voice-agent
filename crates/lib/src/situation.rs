@@ -218,7 +218,7 @@ impl ToolHandler for ReadSituationMessagesTool {
         })
     }
 
-    fn call(&self, args: serde_json::Value) -> Result<String, AgentError> {
+    fn call(&self, args: serde_json::Value) -> Result<crate::tool::ToolResult, AgentError> {
         let session_id = args
             .get("session_id")
             .and_then(|v| v.as_str());
@@ -231,7 +231,7 @@ impl ToolHandler for ReadSituationMessagesTool {
 
         let sessions = self.messages.session_ids();
         let show_session = sessions.len() > 1 && session_id.is_none();
-        Ok(Self::format_messages(&msgs, show_session))
+        Ok(crate::tool::ToolResult::text(Self::format_messages(&msgs, show_session)))
     }
 }
 
@@ -315,7 +315,7 @@ mod tests {
     fn test_tool_call_empty() {
         let store = Arc::new(SituationMessages::default());
         let tool = ReadSituationMessagesTool::new(store);
-        let result = tool.call(serde_json::json!({})).unwrap();
+        let result = tool.call(serde_json::json!({})).unwrap().text;
         assert!(result.contains("No recent"));
     }
 
@@ -324,7 +324,7 @@ mod tests {
         let store = Arc::new(SituationMessages::default());
         store.push("[hook] Write: foo.rs".into(), "hook".into(), "/p".into());
         let tool = ReadSituationMessagesTool::new(store);
-        let result = tool.call(serde_json::json!({})).unwrap();
+        let result = tool.call(serde_json::json!({})).unwrap().text;
         assert!(result.contains("1 situation message"));
         assert!(result.contains("foo.rs"));
     }
@@ -336,11 +336,11 @@ mod tests {
         store.push("b-event".into(), "hook".into(), "/project/b".into());
         let tool = ReadSituationMessagesTool::new(store);
 
-        let result = tool.call(serde_json::json!({"session_id": "/project/a"})).unwrap();
+        let result = tool.call(serde_json::json!({"session_id": "/project/a"})).unwrap().text;
         assert!(result.contains("a-event"));
         assert!(!result.contains("b-event"));
 
-        let result = tool.call(serde_json::json!({})).unwrap();
+        let result = tool.call(serde_json::json!({})).unwrap().text;
         assert!(result.contains("a-event"));
         assert!(result.contains("b-event"));
         // Multi-session output shows session basename
