@@ -143,6 +143,7 @@ pub struct Agent {
     capture_request_rx: crossbeam::channel::Receiver<capture::CaptureRequest>,
     capture_result_tx: crossbeam::channel::Sender<capture::CaptureResult>,
     find_result_tx: crossbeam::channel::Sender<capture::CaptureResult>,
+    ocr_result_tx: crossbeam::channel::Sender<capture::CaptureResult>,
 }
 
 // Top-level constructor function for UniFFI
@@ -191,7 +192,7 @@ pub fn agent_new(config: AgentConfig) -> Result<Arc<Agent>, AgentError> {
         situation.clone(),
     );
 
-    // Register capture + find_window tools (shared request channel, separate result channels)
+    // Register capture tools (shared request channel, separate result channels)
     tool_registry.register(Box::new(capture::CaptureScreenTool::new(
         capture_bridge.request_tx.clone(),
         capture_bridge.capture_result_rx.clone(),
@@ -199,6 +200,10 @@ pub fn agent_new(config: AgentConfig) -> Result<Arc<Agent>, AgentError> {
     tool_registry.register(Box::new(capture::FindWindowTool::new(
         capture_bridge.request_tx.clone(),
         capture_bridge.find_result_rx.clone(),
+    )));
+    tool_registry.register(Box::new(capture::ApplyOcrTool::new(
+        capture_bridge.request_tx.clone(),
+        capture_bridge.ocr_result_rx.clone(),
     )));
 
     Ok(Arc::new(Agent {
@@ -213,6 +218,7 @@ pub fn agent_new(config: AgentConfig) -> Result<Arc<Agent>, AgentError> {
         capture_request_rx: capture_bridge.request_rx,
         capture_result_tx: capture_bridge.capture_result_tx,
         find_result_tx: capture_bridge.find_result_tx,
+        ocr_result_tx: capture_bridge.ocr_result_tx,
     }))
 }
 
@@ -473,6 +479,8 @@ impl Agent {
         };
         if id.starts_with("find_") {
             let _ = self.find_result_tx.send(result);
+        } else if id.starts_with("ocr_") {
+            let _ = self.ocr_result_tx.send(result);
         } else {
             let _ = self.capture_result_tx.send(result);
         }

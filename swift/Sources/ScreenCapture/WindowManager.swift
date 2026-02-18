@@ -78,7 +78,11 @@ public class WindowManager {
 
         let titleLower = title.lowercased()
         guard let window = content.windows.first(where: {
-            ($0.title ?? "").lowercased().contains(titleLower)
+            let winTitle = ($0.title ?? "").lowercased()
+            let appName = ($0.owningApplication?.applicationName ?? "").lowercased()
+            // Match against title, app name, or "app — title" combined
+            return winTitle.contains(titleLower)
+                || "\(appName) — \(winTitle)".contains(titleLower)
         }) else {
             throw CaptureError.windowNotFound("No window matching title '\(title)'")
         }

@@ -183,10 +183,10 @@ let capturePoller = Task { @MainActor in
                     }
                     let text: String
                     if matched.isEmpty {
-                        let all = allWindows.map { $0.summary }.joined(separator: "\n  ")
+                        let all = allWindows.map { $0.findWindowDescription }.joined(separator: "\n  ")
                         text = "No windows matched keywords: \(keywords)\n\nAll windows:\n  \(all)"
                     } else {
-                        let lines = matched.map { $0.summary }.joined(separator: "\n  ")
+                        let lines = matched.map { $0.findWindowDescription }.joined(separator: "\n  ")
                         text = "Found \(matched.count) window(s):\n  \(lines)"
                     }
                     session.agent.submitCaptureResult(id: req.id, imageBase64: "", metadataJson: text)
@@ -198,82 +198,69 @@ let capturePoller = Task { @MainActor in
                 continue
             }
 
-            do {
-                let hasCrop = req.cropX != nil || req.cropY != nil
-                    || req.cropW != nil || req.cropH != nil
-                let isCapture = (req.windowName != nil && !req.windowName!.isEmpty)
-                    || (req.processName != nil && !req.processName!.isEmpty)
-                let isOcr = req.ocr == true
-                let isDetect = req.detect == true
-
-                var image: CGImage
-                var info: WindowInfo
-
-                if isCapture {
-                    // Capture a new window
-                    if let name = req.windowName, !name.isEmpty {
-                        (image, info) = try await wm.captureByTitle(name)
-                    } else {
-                        (image, info) = try await wm.captureByProcess(req.processName!)
+            // apply_ocr: run OCR on cached image with optional crop
+            if req.applyOcr == true {
+                do {
+                    guard let cached = lastCapturedImage, let cachedInfo = lastCaptureInfo else {
+                        session.agent.submitCaptureResult(
+                            id: req.id, imageBase64: "",
+                            metadataJson: "Error: no cached image. Capture a window first with capture_screen."
+                        )
+                        continue
                     }
-                    // Cache the full image
-                    lastCapturedImage = image
-                    lastCaptureInfo = info
-                } else if let cached = lastCapturedImage, let cachedInfo = lastCaptureInfo {
-                    // Use cached image for crop/OCR/detect
-                    image = cached
-                    info = cachedInfo
-                } else {
+                    var image = cached
+                    var cropLabel = ""
+                    let hasCrop = req.cropX != nil || req.cropY != nil
+                        || req.cropW != nil || req.cropH != nil
+                    if hasCrop {
+                        let cx = req.cropX ?? 0.0
+                        let cy = req.cropY ?? 0.0
+                        let cw = req.cropW ?? 1.0
+                        let ch = req.cropH ?? 1.0
+                        if let cropped = WindowManager.cropCGImage(image, x: cx, y: cy, w: cw, h: ch) {
+                            image = cropped
+                            cropLabel = ", Cropped: \(cx),\(cy) \(Int(cw * 100))%x\(Int(ch * 100))%"
+                        }
+                    }
+                    let entries = try performOCR(on: image)
+                    let header = "Window: \(cachedInfo.title ?? "?"), App: \(cachedInfo.appName ?? "?")\(cropLabel)"
+                    let metadata = header + "\n" + formatOCRResults(entries)
+                    session.agent.submitCaptureResult(id: req.id, imageBase64: "", metadataJson: metadata)
+                } catch {
+                    session.agent.submitCaptureResult(
+                        id: req.id, imageBase64: "", metadataJson: "Error: \(error)"
+                    )
+                }
+                continue
+            }
+
+            // capture_screen: capture by window_id, optional detect
+            do {
+                guard let windowId = req.windowId else {
                     session.agent.submitCaptureResult(
                         id: req.id, imageBase64: "",
-                        metadataJson: "Error: no window specified and no cached image"
+                        metadataJson: "Error: window_id is required. Use find_window first."
                     )
                     continue
                 }
 
-                // Apply crop if requested
-                var cropLabel = ""
-                if hasCrop {
-                    let cx = req.cropX ?? 0.0
-                    let cy = req.cropY ?? 0.0
-                    let cw = req.cropW ?? 1.0
-                    let ch = req.cropH ?? 1.0
-                    if let cropped = WindowManager.cropCGImage(image, x: cx, y: cy, w: cw, h: ch) {
-                        image = cropped
-                        cropLabel = ", Cropped: \(cx),\(cy) \(Int(cw * 100))%x\(Int(ch * 100))%"
-                    }
-                }
+                let (image, info) = try await wm.captureWindow(windowId: windowId)
+                lastCapturedImage = image
+                lastCaptureInfo = info
 
-                if isOcr || isDetect {
-                    // Text-only mode: OCR and/or object detection
-                    var parts: [String] = []
-                    let header = "Window: \(info.title ?? "?"), App: \(info.appName ?? "?")\(cropLabel)"
-                    parts.append(header)
-                    if isOcr {
-                        let entries = try performOCR(on: image)
-                        parts.append(formatOCRResults(entries))
-                    }
-                    if isDetect {
-                        let objects = try performObjectDetection(on: image)
-                        parts.append(formatDetectionResults(objects))
-                    }
-                    let metadata = parts.joined(separator: "\n")
+                if req.detect == true {
+                    let objects = try performObjectDetection(on: image)
+                    let header = "Window: \(info.title ?? "?"), App: \(info.appName ?? "?")"
+                    let metadata = header + "\n" + formatDetectionResults(objects)
                     session.agent.submitCaptureResult(id: req.id, imageBase64: "", metadataJson: metadata)
                 } else {
-                    // Image mode: return screenshot
                     let base64 = WindowManager.cgImageToBase64(image) ?? ""
-                    let metadata = "Window: \(info.title ?? "?"), App: \(info.appName ?? "?"), Size: \(Int(info.frame.width))x\(Int(info.frame.height))\(cropLabel)"
+                    let metadata = "Window: \(info.title ?? "?"), App: \(info.appName ?? "?"), Size: \(Int(info.frame.width))x\(Int(info.frame.height))"
                     session.agent.submitCaptureResult(id: req.id, imageBase64: base64, metadataJson: metadata)
                 }
             } catch {
-                // On failure, include the list of available windows so the LLM can retry
-                var msg = "Error: \(error)"
-                if let list = try? await wm.listWindows(), !list.isEmpty {
-                    let windowList = list.map { $0.summary }.joined(separator: "\n  ")
-                    msg += "\n\nAvailable windows:\n  \(windowList)"
-                }
                 session.agent.submitCaptureResult(
-                    id: req.id, imageBase64: "", metadataJson: msg
+                    id: req.id, imageBase64: "", metadataJson: "Error: \(error)"
                 )
             }
         }

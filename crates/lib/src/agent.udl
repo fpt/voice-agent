@@ -34,14 +34,13 @@ dictionary AgentResponse {
 
 dictionary CaptureRequest {
     string id;
-    string? window_name;
-    string? process_name;
+    u32? window_id;
     f64? crop_x;
     f64? crop_y;
     f64? crop_w;
     f64? crop_h;
-    boolean? ocr;
     boolean? detect;
+    boolean? apply_ocr;
     string? search_keywords;
 };
 

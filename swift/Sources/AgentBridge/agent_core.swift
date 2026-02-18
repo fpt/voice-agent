@@ -968,28 +968,26 @@ public func FfiConverterTypeAgentResponse_lower(_ value: AgentResponse) -> RustB
 
 public struct CaptureRequest {
     public var id: String
-    public var windowName: String?
-    public var processName: String?
+    public var windowId: UInt32?
     public var cropX: Double?
     public var cropY: Double?
     public var cropW: Double?
     public var cropH: Double?
-    public var ocr: Bool?
     public var detect: Bool?
+    public var applyOcr: Bool?
     public var searchKeywords: String?
 
     // Default memberwise initializers are never public by default, so we
     // declare one manually.
-    public init(id: String, windowName: String?, processName: String?, cropX: Double?, cropY: Double?, cropW: Double?, cropH: Double?, ocr: Bool?, detect: Bool?, searchKeywords: String?) {
+    public init(id: String, windowId: UInt32?, cropX: Double?, cropY: Double?, cropW: Double?, cropH: Double?, detect: Bool?, applyOcr: Bool?, searchKeywords: String?) {
         self.id = id
-        self.windowName = windowName
-        self.processName = processName
+        self.windowId = windowId
         self.cropX = cropX
         self.cropY = cropY
         self.cropW = cropW
         self.cropH = cropH
-        self.ocr = ocr
         self.detect = detect
+        self.applyOcr = applyOcr
         self.searchKeywords = searchKeywords
     }
 }
@@ -1001,10 +999,7 @@ extension CaptureRequest: Equatable, Hashable {
         if lhs.id != rhs.id {
             return false
         }
-        if lhs.windowName != rhs.windowName {
-            return false
-        }
-        if lhs.processName != rhs.processName {
+        if lhs.windowId != rhs.windowId {
             return false
         }
         if lhs.cropX != rhs.cropX {
@@ -1019,10 +1014,10 @@ extension CaptureRequest: Equatable, Hashable {
         if lhs.cropH != rhs.cropH {
             return false
         }
-        if lhs.ocr != rhs.ocr {
+        if lhs.detect != rhs.detect {
             return false
         }
-        if lhs.detect != rhs.detect {
+        if lhs.applyOcr != rhs.applyOcr {
             return false
         }
         if lhs.searchKeywords != rhs.searchKeywords {
@@ -1033,14 +1028,13 @@ extension CaptureRequest: Equatable, Hashable {
 
     public func hash(into hasher: inout Hasher) {
         hasher.combine(id)
-        hasher.combine(windowName)
-        hasher.combine(processName)
+        hasher.combine(windowId)
         hasher.combine(cropX)
         hasher.combine(cropY)
         hasher.combine(cropW)
         hasher.combine(cropH)
-        hasher.combine(ocr)
         hasher.combine(detect)
+        hasher.combine(applyOcr)
         hasher.combine(searchKeywords)
     }
 }
@@ -1054,28 +1048,26 @@ public struct FfiConverterTypeCaptureRequest: FfiConverterRustBuffer {
         return
             try CaptureRequest(
                 id: FfiConverterString.read(from: &buf), 
-                windowName: FfiConverterOptionString.read(from: &buf), 
-                processName: FfiConverterOptionString.read(from: &buf), 
+                windowId: FfiConverterOptionUInt32.read(from: &buf), 
                 cropX: FfiConverterOptionDouble.read(from: &buf), 
                 cropY: FfiConverterOptionDouble.read(from: &buf), 
                 cropW: FfiConverterOptionDouble.read(from: &buf), 
                 cropH: FfiConverterOptionDouble.read(from: &buf), 
-                ocr: FfiConverterOptionBool.read(from: &buf), 
                 detect: FfiConverterOptionBool.read(from: &buf), 
+                applyOcr: FfiConverterOptionBool.read(from: &buf), 
                 searchKeywords: FfiConverterOptionString.read(from: &buf)
         )
     }
 
     public static func write(_ value: CaptureRequest, into buf: inout [UInt8]) {
         FfiConverterString.write(value.id, into: &buf)
-        FfiConverterOptionString.write(value.windowName, into: &buf)
-        FfiConverterOptionString.write(value.processName, into: &buf)
+        FfiConverterOptionUInt32.write(value.windowId, into: &buf)
         FfiConverterOptionDouble.write(value.cropX, into: &buf)
         FfiConverterOptionDouble.write(value.cropY, into: &buf)
         FfiConverterOptionDouble.write(value.cropW, into: &buf)
         FfiConverterOptionDouble.write(value.cropH, into: &buf)
-        FfiConverterOptionBool.write(value.ocr, into: &buf)
         FfiConverterOptionBool.write(value.detect, into: &buf)
+        FfiConverterOptionBool.write(value.applyOcr, into: &buf)
         FfiConverterOptionString.write(value.searchKeywords, into: &buf)
     }
 }
@@ -1171,6 +1163,30 @@ extension AgentError: Equatable, Hashable {}
 extension AgentError: Foundation.LocalizedError {
     public var errorDescription: String? {
         String(reflecting: self)
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+fileprivate struct FfiConverterOptionUInt32: FfiConverterRustBuffer {
+    typealias SwiftType = UInt32?
+
+    public static func write(_ value: SwiftType, into buf: inout [UInt8]) {
+        guard let value = value else {
+            writeInt(&buf, Int8(0))
+            return
+        }
+        writeInt(&buf, Int8(1))
+        FfiConverterUInt32.write(value, into: &buf)
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SwiftType {
+        switch try readInt(&buf) as Int8 {
+        case 0: return nil
+        case 1: return try FfiConverterUInt32.read(from: &buf)
+        default: throw UniffiInternalError.unexpectedOptionalTag
+        }
     }
 }
 
