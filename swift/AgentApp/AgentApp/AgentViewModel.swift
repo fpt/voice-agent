@@ -165,8 +165,7 @@ final class AgentViewModel {
                     maxTokens: 8192,
                     language: language,
                     workingDir: NSHomeDirectory(),
-                    reasoningEffort: "medium",
-                    watcherDebounceSecs: nil
+                    reasoningEffort: "medium"
                 )
             case .llamacpp:
                 guard case .downloaded(let path) = modelDownloadState else {
@@ -183,8 +182,7 @@ final class AgentViewModel {
                     maxTokens: 2048,
                     language: language,
                     workingDir: NSHomeDirectory(),
-                    reasoningEffort: nil,
-                    watcherDebounceSecs: nil
+                    reasoningEffort: nil
                 )
             }
 

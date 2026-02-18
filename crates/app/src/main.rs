@@ -64,7 +64,6 @@ fn main() {
     let tool_registry = agent_core::tool::create_default_registry(
         std::path::PathBuf::from(&working_dir),
         skill_registry,
-        None,
         situation,
     );
 

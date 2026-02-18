@@ -15,28 +15,19 @@ public class AgentSession: @unchecked Sendable {
     public let language: String
     public let configPath: String
 
-    /// Called when the summary poller produces a response (high = user speech, normal = watcher).
-    /// Parameters: response text, priority.
-    public var onResponse: (@Sendable (String, EventPriority) -> Void)?
-
-    /// Called when a watcher summary is received (before LLM processing).
-    public var onWatcherSummary: (@Sendable (String) -> Void)?
-
-    /// Called when the summary poller encounters an error.
-    public var onError: (@Sendable (Error) -> Void)?
+    /// Called when a watcher event is pushed to situation context (for logging).
+    public var onWatcherEvent: (@Sendable (String) -> Void)?
 
     // MARK: - Private state
 
     private let logger = Logger("AgentSession")
-    private var agentLock = os_unfair_lock()
-    private var summaryPoller: Task<Void, Never>?
     private var socketReceiver: SocketReceiver?
     private var sessionWatcher: SessionJSONLWatcher?
 
     // MARK: - Init
 
     /// Initialize agent, TTS, and load skills.
-    /// Does NOT start watcher or poller — call `start()` for that.
+    /// Does NOT start watcher — call `start()` for that.
     public init(config: Config, configPath: String) async throws {
         self.config = config
         self.configPath = configPath
@@ -79,16 +70,13 @@ public class AgentSession: @unchecked Sendable {
             maxTokens: UInt32(config.llm.maxTokens),
             language: language,
             workingDir: FileManager.default.currentDirectoryPath,
-            reasoningEffort: config.llm.reasoningEffort,
-            watcherDebounceSecs: (config.watcher?.enabled == true)
-                ? config.watcher?.debounceInterval ?? 3.0
-                : nil
+            reasoningEffort: config.llm.reasoningEffort
         )
 
         self.agent = try agentNew(config: agentConfig)
         logger.info("Agent initialized")
 
-        // TTS (must init before post-init setup that captures self)
+        // TTS
         let ttsConfig = config.tts ?? Config.TTSConfig(
             enabled: false, voice: nil, rate: 0.5, pitchMultiplier: 1.0, volume: 1.0
         )
@@ -109,7 +97,7 @@ public class AgentSession: @unchecked Sendable {
             volume: ttsConfig.volume
         ))
 
-        // --- Post-init setup (all stored properties initialized) ---
+        // --- Post-init setup ---
 
         // Load system prompt with {language} template
         if let systemPromptPath = config.agent.systemPromptPath {
@@ -146,32 +134,24 @@ public class AgentSession: @unchecked Sendable {
 
     // MARK: - Lifecycle
 
-    /// Start watcher event sources and summary poller.
+    /// Start watcher event sources.
     public func start() {
         startWatcher()
-        startSummaryPoller()
     }
 
-    /// Stop all background tasks and watcher resources.
+    /// Stop watcher resources.
     public func stop() {
-        summaryPoller?.cancel()
-        summaryPoller = nil
         sessionWatcher?.stop()
         sessionWatcher = nil
         socketReceiver?.stop()
         socketReceiver = nil
     }
 
-    // MARK: - Agent calls (thread-safe)
+    // MARK: - Agent calls
 
-    /// Run agent.step() with lock serialization.
+    /// Run one conversation turn.
     public func step(_ text: String) throws -> AgentResponse {
-        try locked { try agent.step(userInput: text) }
-    }
-
-    /// Run agent.chatOnce() with lock serialization.
-    public func chatOnce(input: String, skillName: String?) throws -> String {
-        try locked { try agent.chatOnce(input: input, skillName: skillName) }
+        try agent.step(userInput: text)
     }
 
     /// Reset conversation history.
@@ -185,8 +165,6 @@ public class AgentSession: @unchecked Sendable {
         case "/reset":
             agent.reset()
             return true
-        case "/history":
-            return true  // caller should print agent.getConversationHistory()
         case "/voices":
             TextToSpeech.printAvailableVoices()
             return true
@@ -207,12 +185,6 @@ public class AgentSession: @unchecked Sendable {
 
     // MARK: - Private
 
-    private func locked<T>(_ body: () throws -> T) rethrows -> T {
-        os_unfair_lock_lock(&agentLock)
-        defer { os_unfair_lock_unlock(&agentLock) }
-        return try body()
-    }
-
     private func startWatcher() {
         guard let wc = config.watcher, wc.enabled else { return }
 
@@ -222,10 +194,11 @@ public class AgentSession: @unchecked Sendable {
             logger.info("Watching session JSONL: \(sp)")
             let watcher = SessionJSONLWatcher(filePath: sp)
             sessionWatcher = watcher
-            Task.detached { [agent] in
+            Task.detached { [agent, onWatcherEvent] in
                 for await event in watcher.events() {
                     if let json = event.toRouterJSON() {
                         try? agent.feedWatcherEvent(json: json)
+                        onWatcherEvent?(json)
                     }
                 }
             }
@@ -240,57 +213,16 @@ public class AgentSession: @unchecked Sendable {
         do {
             try receiver.start()
             logger.info("Socket receiver listening on \(sockPath)")
-            Task.detached { [agent] in
+            Task.detached { [agent, onWatcherEvent] in
                 for await event in receiver.events() {
                     if let json = event.toRouterJSON() {
                         try? agent.feedWatcherEvent(json: json)
+                        onWatcherEvent?(json)
                     }
                 }
             }
         } catch {
             logger.error("Failed to start socket receiver: \(error)")
-        }
-    }
-
-    private func startSummaryPoller() {
-        summaryPoller = Task.detached { [weak self] in
-            while !Task.isCancelled {
-                try? await Task.sleep(for: .milliseconds(100))
-                guard let self else { return }
-
-                let summaries = self.agent.drainWatcherSummaries()
-                guard !summaries.isEmpty else { continue }
-
-                // Process high-priority (user speech) first so watcher events
-                // don't block/delay the user's response.
-                let high = summaries.filter { $0.priority == .high }
-                let normal = summaries.filter { $0.priority != .high }
-
-                for summary in high {
-                    do {
-                        let response = try self.step(summary.text)
-                        let text = self.formatResponse(response.content)
-                        self.onResponse?(text, summary.priority)
-                    } catch {
-                        self.onError?(error)
-                    }
-                }
-
-                for summary in normal {
-                    do {
-                        self.onWatcherSummary?(summary.text)
-                        let response = try self.chatOnce(
-                            input: "[System Event] \(summary.text)",
-                            skillName: "claude-activity-report"
-                        )
-                        let text = self.formatResponse(response)
-                        // Normal priority: print only, no TTS (avoids mic feedback loop)
-                        self.onResponse?(text, summary.priority)
-                    } catch {
-                        self.onError?(error)
-                    }
-                }
-            }
         }
     }
 }

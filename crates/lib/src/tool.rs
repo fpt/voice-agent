@@ -1,7 +1,6 @@
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
-use crate::event_router::{EventRouter, ReportEventTool};
 use crate::llm::{ImageContent, ToolDefinition};
 use crate::situation::{ReadSituationMessagesTool, SituationMessages};
 use crate::skill::{SkillLookupTool, SkillRegistry};
@@ -156,7 +155,6 @@ impl<'a> ToolAccess for FilteredToolRegistry<'a> {
 pub fn create_default_registry(
     working_dir: PathBuf,
     skill_registry: Arc<SkillRegistry>,
-    event_router: Option<Arc<EventRouter>>,
     situation: Arc<SituationMessages>,
 ) -> ToolRegistry {
     let mut registry = ToolRegistry::new();
@@ -165,9 +163,6 @@ pub fn create_default_registry(
     registry.register(Box::new(TaskTool::new()));
     registry.register(Box::new(SkillLookupTool::new(skill_registry)));
     registry.register(Box::new(ReadSituationMessagesTool::new(situation)));
-    if let Some(router) = event_router {
-        registry.register(Box::new(ReportEventTool::new(router)));
-    }
     registry
 }
 

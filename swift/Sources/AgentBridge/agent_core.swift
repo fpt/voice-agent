@@ -532,13 +532,7 @@ public protocol AgentProtocol : AnyObject {
     
     func addSkill(name: String, description: String, prompt: String) 
     
-    func chatOnce(input: String, skillName: String?) throws  -> String
-    
     func drainCaptureRequests()  -> [CaptureRequest]
-    
-    func drainWatcherSummaries()  -> [EventSummary]
-    
-    func feedUserSpeech(text: String) 
     
     func feedWatcherEvent(json: String) throws 
     
@@ -619,34 +613,11 @@ open func addSkill(name: String, description: String, prompt: String) {try! rust
 }
 }
     
-open func chatOnce(input: String, skillName: String?)throws  -> String {
-    return try  FfiConverterString.lift(try rustCallWithError(FfiConverterTypeAgentError.lift) {
-    uniffi_agent_core_fn_method_agent_chat_once(self.uniffiClonePointer(),
-        FfiConverterString.lower(input),
-        FfiConverterOptionString.lower(skillName),$0
-    )
-})
-}
-    
 open func drainCaptureRequests() -> [CaptureRequest] {
     return try!  FfiConverterSequenceTypeCaptureRequest.lift(try! rustCall() {
     uniffi_agent_core_fn_method_agent_drain_capture_requests(self.uniffiClonePointer(),$0
     )
 })
-}
-    
-open func drainWatcherSummaries() -> [EventSummary] {
-    return try!  FfiConverterSequenceTypeEventSummary.lift(try! rustCall() {
-    uniffi_agent_core_fn_method_agent_drain_watcher_summaries(self.uniffiClonePointer(),$0
-    )
-})
-}
-    
-open func feedUserSpeech(text: String) {try! rustCall() {
-    uniffi_agent_core_fn_method_agent_feed_user_speech(self.uniffiClonePointer(),
-        FfiConverterString.lower(text),$0
-    )
-}
 }
     
 open func feedWatcherEvent(json: String)throws  {try rustCallWithError(FfiConverterTypeAgentError.lift) {
@@ -786,11 +757,10 @@ public struct AgentConfig {
     public var language: String?
     public var workingDir: String?
     public var reasoningEffort: String?
-    public var watcherDebounceSecs: Double?
 
     // Default memberwise initializers are never public by default, so we
     // declare one manually.
-    public init(modelPath: String?, baseUrl: String, model: String, apiKey: String?, useHarmonyTemplate: Bool, temperature: Float?, maxTokens: UInt32, language: String?, workingDir: String?, reasoningEffort: String?, watcherDebounceSecs: Double?) {
+    public init(modelPath: String?, baseUrl: String, model: String, apiKey: String?, useHarmonyTemplate: Bool, temperature: Float?, maxTokens: UInt32, language: String?, workingDir: String?, reasoningEffort: String?) {
         self.modelPath = modelPath
         self.baseUrl = baseUrl
         self.model = model
@@ -801,7 +771,6 @@ public struct AgentConfig {
         self.language = language
         self.workingDir = workingDir
         self.reasoningEffort = reasoningEffort
-        self.watcherDebounceSecs = watcherDebounceSecs
     }
 }
 
@@ -839,9 +808,6 @@ extension AgentConfig: Equatable, Hashable {
         if lhs.reasoningEffort != rhs.reasoningEffort {
             return false
         }
-        if lhs.watcherDebounceSecs != rhs.watcherDebounceSecs {
-            return false
-        }
         return true
     }
 
@@ -856,7 +822,6 @@ extension AgentConfig: Equatable, Hashable {
         hasher.combine(language)
         hasher.combine(workingDir)
         hasher.combine(reasoningEffort)
-        hasher.combine(watcherDebounceSecs)
     }
 }
 
@@ -877,8 +842,7 @@ public struct FfiConverterTypeAgentConfig: FfiConverterRustBuffer {
                 maxTokens: FfiConverterUInt32.read(from: &buf), 
                 language: FfiConverterOptionString.read(from: &buf), 
                 workingDir: FfiConverterOptionString.read(from: &buf), 
-                reasoningEffort: FfiConverterOptionString.read(from: &buf), 
-                watcherDebounceSecs: FfiConverterOptionDouble.read(from: &buf)
+                reasoningEffort: FfiConverterOptionString.read(from: &buf)
         )
     }
 
@@ -893,7 +857,6 @@ public struct FfiConverterTypeAgentConfig: FfiConverterRustBuffer {
         FfiConverterOptionString.write(value.language, into: &buf)
         FfiConverterOptionString.write(value.workingDir, into: &buf)
         FfiConverterOptionString.write(value.reasoningEffort, into: &buf)
-        FfiConverterOptionDouble.write(value.watcherDebounceSecs, into: &buf)
     }
 }
 
@@ -1133,72 +1096,6 @@ public func FfiConverterTypeCaptureRequest_lower(_ value: CaptureRequest) -> Rus
 }
 
 
-public struct EventSummary {
-    public var text: String
-    public var priority: EventPriority
-
-    // Default memberwise initializers are never public by default, so we
-    // declare one manually.
-    public init(text: String, priority: EventPriority) {
-        self.text = text
-        self.priority = priority
-    }
-}
-
-
-
-extension EventSummary: Equatable, Hashable {
-    public static func ==(lhs: EventSummary, rhs: EventSummary) -> Bool {
-        if lhs.text != rhs.text {
-            return false
-        }
-        if lhs.priority != rhs.priority {
-            return false
-        }
-        return true
-    }
-
-    public func hash(into hasher: inout Hasher) {
-        hasher.combine(text)
-        hasher.combine(priority)
-    }
-}
-
-
-#if swift(>=5.8)
-@_documentation(visibility: private)
-#endif
-public struct FfiConverterTypeEventSummary: FfiConverterRustBuffer {
-    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> EventSummary {
-        return
-            try EventSummary(
-                text: FfiConverterString.read(from: &buf), 
-                priority: FfiConverterTypeEventPriority.read(from: &buf)
-        )
-    }
-
-    public static func write(_ value: EventSummary, into buf: inout [UInt8]) {
-        FfiConverterString.write(value.text, into: &buf)
-        FfiConverterTypeEventPriority.write(value.priority, into: &buf)
-    }
-}
-
-
-#if swift(>=5.8)
-@_documentation(visibility: private)
-#endif
-public func FfiConverterTypeEventSummary_lift(_ buf: RustBuffer) throws -> EventSummary {
-    return try FfiConverterTypeEventSummary.lift(buf)
-}
-
-#if swift(>=5.8)
-@_documentation(visibility: private)
-#endif
-public func FfiConverterTypeEventSummary_lower(_ value: EventSummary) -> RustBuffer {
-    return FfiConverterTypeEventSummary.lower(value)
-}
-
-
 public enum AgentError {
 
     
@@ -1276,70 +1173,6 @@ extension AgentError: Foundation.LocalizedError {
         String(reflecting: self)
     }
 }
-
-// Note that we don't yet support `indirect` for enums.
-// See https://github.com/mozilla/uniffi-rs/issues/396 for further discussion.
-
-public enum EventPriority {
-    
-    case high
-    case normal
-}
-
-
-#if swift(>=5.8)
-@_documentation(visibility: private)
-#endif
-public struct FfiConverterTypeEventPriority: FfiConverterRustBuffer {
-    typealias SwiftType = EventPriority
-
-    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> EventPriority {
-        let variant: Int32 = try readInt(&buf)
-        switch variant {
-        
-        case 1: return .high
-        
-        case 2: return .normal
-        
-        default: throw UniffiInternalError.unexpectedEnumCase
-        }
-    }
-
-    public static func write(_ value: EventPriority, into buf: inout [UInt8]) {
-        switch value {
-        
-        
-        case .high:
-            writeInt(&buf, Int32(1))
-        
-        
-        case .normal:
-            writeInt(&buf, Int32(2))
-        
-        }
-    }
-}
-
-
-#if swift(>=5.8)
-@_documentation(visibility: private)
-#endif
-public func FfiConverterTypeEventPriority_lift(_ buf: RustBuffer) throws -> EventPriority {
-    return try FfiConverterTypeEventPriority.lift(buf)
-}
-
-#if swift(>=5.8)
-@_documentation(visibility: private)
-#endif
-public func FfiConverterTypeEventPriority_lower(_ value: EventPriority) -> RustBuffer {
-    return FfiConverterTypeEventPriority.lower(value)
-}
-
-
-
-extension EventPriority: Equatable, Hashable {}
-
-
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -1510,31 +1343,6 @@ fileprivate struct FfiConverterSequenceTypeCaptureRequest: FfiConverterRustBuffe
         return seq
     }
 }
-
-#if swift(>=5.8)
-@_documentation(visibility: private)
-#endif
-fileprivate struct FfiConverterSequenceTypeEventSummary: FfiConverterRustBuffer {
-    typealias SwiftType = [EventSummary]
-
-    public static func write(_ value: [EventSummary], into buf: inout [UInt8]) {
-        let len = Int32(value.count)
-        writeInt(&buf, len)
-        for item in value {
-            FfiConverterTypeEventSummary.write(item, into: &buf)
-        }
-    }
-
-    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> [EventSummary] {
-        let len: Int32 = try readInt(&buf)
-        var seq = [EventSummary]()
-        seq.reserveCapacity(Int(len))
-        for _ in 0 ..< len {
-            seq.append(try FfiConverterTypeEventSummary.read(from: &buf))
-        }
-        return seq
-    }
-}
 public func agentNew(config: AgentConfig)throws  -> Agent {
     return try  FfiConverterTypeAgent.lift(try rustCallWithError(FfiConverterTypeAgentError.lift) {
     uniffi_agent_core_fn_func_agent_new(
@@ -1564,16 +1372,7 @@ private var initializationResult: InitializationResult = {
     if (uniffi_agent_core_checksum_method_agent_add_skill() != 41357) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_agent_core_checksum_method_agent_chat_once() != 37266) {
-        return InitializationResult.apiChecksumMismatch
-    }
     if (uniffi_agent_core_checksum_method_agent_drain_capture_requests() != 4180) {
-        return InitializationResult.apiChecksumMismatch
-    }
-    if (uniffi_agent_core_checksum_method_agent_drain_watcher_summaries() != 63735) {
-        return InitializationResult.apiChecksumMismatch
-    }
-    if (uniffi_agent_core_checksum_method_agent_feed_user_speech() != 40752) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_agent_core_checksum_method_agent_feed_watcher_event() != 59668) {

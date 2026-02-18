@@ -141,26 +141,9 @@ if sttConfig.enabled {
     }
 }
 
-// Wire AgentSession callbacks for CLI output
-session.onResponse = { @Sendable text, priority in
-    print("Assistant: \(text)\n")
-    // Only TTS high-priority (user speech) responses.
-    // Normal-priority (watcher summaries) are print-only to avoid mic feedback loop.
-    if ttsEnabled && priority == .high {
-        Task { @MainActor in
-            audioCapture.mute()
-            await session.tts.speakAsync(text)
-            audioCapture.unmute()
-        }
-    }
-}
-
-session.onWatcherSummary = { @Sendable text in
-    print("\n\u{1B}[36m[Watcher]\u{1B}[0m \(text)\n")
-}
-
-session.onError = { @Sendable error in
-    logger.error("Summary processing error: \(error)")
+// Watcher events are pushed to situation context — just log them.
+session.onWatcherEvent = { @Sendable json in
+    logger.debug("[Watcher] \(json)")
 }
 
 // Start watcher + summary poller
@@ -434,7 +417,25 @@ func runContinuousVoiceMode() async {
         if let t = typedText { parts.append("----text: \(t)") }
         let combined = parts.joined(separator: "\n")
         guard !combined.isEmpty else { return }
-        session.agent.feedUserSpeech(text: combined)
+        Task.detached {
+            do {
+                let response = try session.step(combined)
+                let text = session.formatResponse(response.content)
+                await MainActor.run {
+                    if let reasoning = response.reasoning {
+                        print("\u{1B}[90m💭 \(reasoning)\u{1B}[0m\n")
+                    }
+                    print("Assistant: \(text)\n")
+                }
+                if ttsEnabled {
+                    await MainActor.run { audioCapture.mute() }
+                    await session.tts.speakAsync(text)
+                    await MainActor.run { audioCapture.unmute() }
+                }
+            } catch {
+                await MainActor.run { logger.error("Agent error: \(error)") }
+            }
+        }
     }
 
     audioCapture.onVolatileResult = { text in
@@ -546,7 +547,7 @@ Commands: /reset /quit /help /history /voices /stop
                                 try? await Task.sleep(for: .milliseconds(combineWindowMs))
                                 guard !Task.isCancelled else { return }
                                 if let voice = bufferedVoice {
-                                    session.agent.feedUserSpeech(text: voice)
+                                    feedInput(voiceText: voice, typedText: nil)
                                     bufferedVoice = nil
                                 }
                                 combineTimer = nil

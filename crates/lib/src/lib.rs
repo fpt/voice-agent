@@ -22,7 +22,6 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 pub use capture::CaptureRequest;
-pub use event_router::{EventPriority, EventSummary};
 pub use harmony::HarmonyTemplate;
 pub use llm::{create_provider, ChatMessage, ChatRole};
 use tool::ToolAccess;
@@ -90,8 +89,6 @@ pub struct AgentConfig {
     pub language: Option<String>,
     pub working_dir: Option<String>,
     pub reasoning_effort: Option<String>,
-    /// If set, enables the event router with this debounce interval in seconds.
-    pub watcher_debounce_secs: Option<f64>,
 }
 
 impl Default for AgentConfig {
@@ -107,7 +104,6 @@ impl Default for AgentConfig {
             language: Some("en".to_string()),
             working_dir: None,
             reasoning_effort: None,
-            watcher_debounce_secs: None,
         }
     }
 }
@@ -143,7 +139,6 @@ pub struct Agent {
     system_prompt: Arc<Mutex<Option<String>>>,
     tool_registry: tool::ToolRegistry,
     skill_registry: Arc<skill::SkillRegistry>,
-    event_router: Option<Arc<event_router::EventRouter>>,
     situation: Arc<situation::SituationMessages>,
     capture_request_rx: crossbeam::channel::Receiver<capture::CaptureRequest>,
     capture_result_tx: crossbeam::channel::Sender<capture::CaptureResult>,
@@ -185,13 +180,6 @@ pub fn agent_new(config: AgentConfig) -> Result<Arc<Agent>, AgentError> {
     tracing::info!("Tool working directory: {}", working_dir.display());
     let skill_registry = Arc::new(skill::SkillRegistry::new());
 
-    // Create event router if watcher is enabled
-    let event_router = config.watcher_debounce_secs.map(|secs| {
-        let debounce = std::time::Duration::from_secs_f64(secs);
-        tracing::info!("Event router enabled with {:.1}s debounce", secs);
-        Arc::new(event_router::EventRouter::new(debounce))
-    });
-
     let situation = Arc::new(situation::SituationMessages::default());
 
     // Create capture bridge
@@ -200,7 +188,6 @@ pub fn agent_new(config: AgentConfig) -> Result<Arc<Agent>, AgentError> {
     let mut tool_registry = tool::create_default_registry(
         working_dir,
         skill_registry.clone(),
-        event_router.clone(),
         situation.clone(),
     );
 
@@ -222,7 +209,6 @@ pub fn agent_new(config: AgentConfig) -> Result<Arc<Agent>, AgentError> {
         system_prompt: Arc::new(Mutex::new(None)),
         tool_registry,
         skill_registry,
-        event_router,
         situation,
         capture_request_rx: capture_bridge.request_rx,
         capture_result_tx: capture_bridge.capture_result_tx,
@@ -452,79 +438,15 @@ impl Agent {
         })
     }
 
-    /// Drain all available event summaries (non-blocking).
-    ///
-    /// Returns summaries with priority: `High` for user speech (cancel TTS),
-    /// `Normal` for Claude Code watcher events.
-    pub fn drain_watcher_summaries(&self) -> Vec<event_router::EventSummary> {
-        self.event_router
-            .as_ref()
-            .map(|r| r.drain_summaries())
-            .unwrap_or_default()
-    }
-
-    /// Feed user speech into the event router (high priority, no debounce).
-    pub fn feed_user_speech(&self, text: String) {
-        if let Some(ref router) = self.event_router {
-            router.feed_user_speech(&text);
-        }
-    }
-
-    /// Feed a watcher event directly (without MCP).
+    /// Feed a watcher event — parses JSON and pushes to the situation stack.
+    /// The LLM can read these via the read_situation_messages tool when the user asks.
     pub fn feed_watcher_event(&self, json: String) -> Result<(), AgentError> {
-        let router = self.event_router.as_ref().ok_or_else(|| {
-            AgentError::ConfigError("Event router not enabled".to_string())
-        })?;
         let event: event_router::WatcherEvent = serde_json::from_str(&json)
             .map_err(|e| AgentError::ParseError(format!("Invalid event JSON: {}", e)))?;
-
-        // Push to volatile situation store for read_situation_messages tool
         if let Some((line, source, session_id)) = format_event_for_situation(&event) {
             self.situation.push(line, source, session_id);
         }
-
-        router.feed(event);
         Ok(())
-    }
-
-    /// One-shot chat without tools — for event reporting.
-    /// If `skill_name` is provided, injects that skill's prompt body.
-    /// Otherwise injects the skill catalog as before.
-    pub fn chat_once(&self, input: String, skill_name: Option<String>) -> Result<String, AgentError> {
-        let mut messages = Vec::new();
-
-        // Use custom system prompt if set
-        if let Some(prompt) = self.system_prompt.lock().as_ref() {
-            messages.push(ChatMessage::system(prompt.clone()));
-        }
-
-        // Inject skill body or catalog
-        if let Some(ref name) = skill_name {
-            if let Some(prompt) = self.skill_registry.get(name) {
-                messages.push(ChatMessage::system(prompt));
-            }
-        } else if let Some(catalog) = self.skill_registry.catalog() {
-            messages.push(ChatMessage::system(catalog));
-        }
-
-        messages.push(ChatMessage::system(
-            "Respond in 1-2 brief spoken sentences. Do not use any tools. \
-             Just summarize what happened concisely."
-                .to_string(),
-        ));
-        messages.push(ChatMessage::user(input));
-
-        let response = self
-            .client
-            .chat(&messages)
-            .map_err(|e| AgentError::NetworkError(e.to_string()))?;
-
-        // Store assistant response in memory (but not the input) so user can ask about it
-        self.memory
-            .lock()
-            .add_message(ChatMessage::assistant(response.clone()));
-
-        Ok(response)
     }
 
     /// Drain all pending capture requests (Swift polls this).
