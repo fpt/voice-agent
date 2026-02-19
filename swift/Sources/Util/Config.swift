@@ -8,6 +8,12 @@ public struct Config: Codable {
     public let tts: TTSConfig?
     public let stt: STTConfig?
     public let watcher: WatcherConfig?
+    public let mcpServers: [McpServer]?
+
+    public struct McpServer: Codable {
+        public let command: String
+        public let args: [String]
+    }
 
     public struct LLMConfig: Codable {
         public let baseURL: String
@@ -16,6 +22,7 @@ public struct Config: Codable {
         public let harmonyTemplate: Bool
         public let temperature: Float?
         public let maxTokens: Int
+        public let contextWindow: Int?
         public let modelPath: String?
         public let modelRepo: String?
         public let modelFile: String?
@@ -28,6 +35,7 @@ public struct Config: Codable {
             case harmonyTemplate
             case temperature
             case maxTokens
+            case contextWindow
             case modelPath
             case modelRepo
             case modelFile
@@ -39,11 +47,13 @@ public struct Config: Codable {
         public let systemPromptPath: String?
         public let maxTurns: Int
         public let language: String?
+        public let skillPaths: [String]?
 
         enum CodingKeys: String, CodingKey {
             case systemPromptPath
             case maxTurns
             case language
+            case skillPaths
         }
     }
 
@@ -118,6 +128,7 @@ public struct Config: Codable {
                 harmonyTemplate: true,
                 temperature: 0.7,
                 maxTokens: 4096,
+                contextWindow: nil,
                 modelPath: nil,
                 modelRepo: nil,
                 modelFile: nil,
@@ -126,7 +137,8 @@ public struct Config: Codable {
             agent: AgentConfig(
                 systemPromptPath: nil,
                 maxTurns: 50,
-                language: "en"
+                language: "en",
+                skillPaths: nil
             ),
             tts: TTSConfig(
                 enabled: false,
@@ -138,7 +150,8 @@ public struct Config: Codable {
             stt: STTConfig(
                 enabled: false
             ),
-            watcher: nil
+            watcher: nil,
+            mcpServers: nil
         )
     }
 }

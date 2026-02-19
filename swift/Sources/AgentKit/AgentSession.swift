@@ -60,6 +60,10 @@ public class AgentSession: @unchecked Sendable {
             }
         }
 
+        let mcpServers = (config.mcpServers ?? []).map {
+            McpServerConfig(command: $0.command, args: $0.args)
+        }
+        let contextWindow = config.llm.contextWindow.map { UInt32($0) } ?? 128_000
         let agentConfig = AgentConfig(
             modelPath: modelPath,
             baseUrl: config.llm.baseURL,
@@ -68,9 +72,11 @@ public class AgentSession: @unchecked Sendable {
             useHarmonyTemplate: config.llm.harmonyTemplate,
             temperature: config.llm.temperature,
             maxTokens: UInt32(config.llm.maxTokens),
+            contextWindow: contextWindow,
             language: language,
             workingDir: FileManager.default.currentDirectoryPath,
-            reasoningEffort: config.llm.reasoningEffort
+            reasoningEffort: config.llm.reasoningEffort,
+            mcpServers: mcpServers
         )
 
         self.agent = try agentNew(config: agentConfig)
@@ -123,13 +129,14 @@ public class AgentSession: @unchecked Sendable {
             }
         }
 
-        // Load skills
-        let projectDir = URL(fileURLWithPath: configPath).deletingLastPathComponent().path
-        let discoveredSkills = SkillLoader.loadAll(projectDir: projectDir)
+        // Load skills from configured paths (relative to config dir)
+        let configDir = URL(fileURLWithPath: configPath).deletingLastPathComponent().path
+        let skillPaths = config.agent.skillPaths ?? ["skills"]
+        let discoveredSkills = SkillLoader.loadAll(paths: skillPaths, baseDir: configDir)
         for skill in discoveredSkills {
             agent.addSkill(name: skill.name, description: skill.description, prompt: skill.prompt)
         }
-        logger.info("Skills registered (\(discoveredSkills.count) from skills/ and ~/.claude)")
+        logger.info("Skills registered (\(discoveredSkills.count) from \(skillPaths))")
     }
 
     // MARK: - Lifecycle

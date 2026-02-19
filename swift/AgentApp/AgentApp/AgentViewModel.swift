@@ -55,6 +55,7 @@ final class AgentViewModel {
     var isListening = false
     var liveTranscript = ""
     var modelDownloadState: ModelDownloadState = .notDownloaded
+    var contextPercent: Int = 0
 
     private var agent: Agent?
     private let synthesizer = AVSpeechSynthesizer()
@@ -163,9 +164,11 @@ final class AgentViewModel {
                     useHarmonyTemplate: false,
                     temperature: nil,
                     maxTokens: 8192,
+                    contextWindow: 128_000,
                     language: language,
                     workingDir: NSHomeDirectory(),
-                    reasoningEffort: "medium"
+                    reasoningEffort: "medium",
+                    mcpServers: []
                 )
             case .llamacpp:
                 guard case .downloaded(let path) = modelDownloadState else {
@@ -180,9 +183,11 @@ final class AgentViewModel {
                     useHarmonyTemplate: false,
                     temperature: 0.7,
                     maxTokens: 2048,
+                    contextWindow: 32_000,
                     language: language,
                     workingDir: NSHomeDirectory(),
-                    reasoningEffort: nil
+                    reasoningEffort: nil,
+                    mcpServers: []
                 )
             }
 
@@ -277,6 +282,7 @@ final class AgentViewModel {
                 await MainActor.run {
                     guard let self else { return }
                     self.messages.append(ChatMessage(role: .assistant, text: response.content))
+                    self.contextPercent = Int(response.contextPercent)
                     self.isLoading = false
                     if self.ttsEnabled {
                         self.speak(response.content)

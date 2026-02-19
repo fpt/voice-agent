@@ -333,7 +333,8 @@ Type your messages below. Commands:
             if let reasoning = response.reasoning {
                 print("\u{1B}[90m💭 \(reasoning)\u{1B}[0m\n")
             }
-            print("Assistant: \(finalResponse)\n")
+            print("Assistant: \(finalResponse)")
+            print("\u{1B}[90m[\(Int(response.contextPercent))% context]\u{1B}[0m\n")
 
             if ttsEnabled {
                 await session.tts.speakAsync(finalResponse)
@@ -412,7 +413,8 @@ func runContinuousVoiceMode() async {
                     if let reasoning = response.reasoning {
                         print("\u{1B}[90m💭 \(reasoning)\u{1B}[0m\n")
                     }
-                    print("Assistant: \(text)\n")
+                    print("Assistant: \(text)")
+                    print("\u{1B}[90m[\(Int(response.contextPercent))% context]\u{1B}[0m\n")
                 }
                 if ttsEnabled {
                     await MainActor.run { audioCapture.mute() }

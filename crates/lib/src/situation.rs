@@ -1,13 +1,13 @@
-//! Volatile situation messages — TTL-based store for system events.
+//! Volatile situation messages — windowed store for system events.
 //!
 //! Events from Claude Code hooks, session JSONL, and MCP tools are pushed here
-//! as one-line records. Messages auto-expire after a configurable TTL (default 60s).
+//! as one-line records. Messages auto-expire after a configurable TTL (default 10min).
 //! The ReAct loop reads them via the `read_situation_messages` tool.
 //!
 //! Each message carries a `session_id` (working directory path) so multiple
-//! Claude Code instances can be distinguished.
+//! Claude Code instances can be distinguished. Filtering supports partial,
+//! case-insensitive matching on any part of the path or its basename.
 
-use std::collections::HashSet;
 use std::sync::Mutex;
 use std::time::{Duration, Instant, SystemTime};
 
@@ -63,13 +63,19 @@ impl SituationMessages {
         msgs.clone()
     }
 
-    /// Return non-expired messages for a specific session.
-    pub fn read_by_session(&self, session_id: &str) -> Vec<SituationMessage> {
+    /// Return non-expired messages whose session_id contains `query`
+    /// (case-insensitive, matches against both the full path and its basename).
+    pub fn read_by_session(&self, query: &str) -> Vec<SituationMessage> {
         let now = Instant::now();
         let mut msgs = self.messages.lock().unwrap();
         msgs.retain(|m| now.duration_since(m.created) < self.ttl);
+        let q = query.to_lowercase();
         msgs.iter()
-            .filter(|m| m.session_id == session_id)
+            .filter(|m| {
+                let id_lower = m.session_id.to_lowercase();
+                let basename = session_basename(&id_lower);
+                id_lower.contains(&q) || basename.contains(&q)
+            })
             .cloned()
             .collect()
     }
@@ -83,13 +89,14 @@ impl SituationMessages {
             .count()
     }
 
-    /// Distinct session IDs among non-expired messages.
+    /// Distinct session IDs among non-expired messages, ordered by most recent first.
     pub fn session_ids(&self) -> Vec<String> {
         let now = Instant::now();
         let msgs = self.messages.lock().unwrap();
-        let mut seen = HashSet::new();
+        // Walk backwards (newest first) to get recency order.
+        let mut seen = std::collections::HashSet::new();
         let mut ids = Vec::new();
-        for m in msgs.iter().filter(|m| now.duration_since(m.created) < self.ttl) {
+        for m in msgs.iter().rev().filter(|m| now.duration_since(m.created) < self.ttl) {
             if seen.insert(m.session_id.clone()) {
                 ids.push(m.session_id.clone());
             }
@@ -110,8 +117,16 @@ impl SituationMessages {
 
 impl Default for SituationMessages {
     fn default() -> Self {
-        Self::new(Duration::from_secs(60))
+        Self::new(Duration::from_secs(600)) // 10 minutes
     }
+}
+
+/// Extract the last path component for display.
+fn session_basename(session_id: &str) -> &str {
+    std::path::Path::new(session_id)
+        .file_name()
+        .and_then(|f| f.to_str())
+        .unwrap_or(session_id)
 }
 
 // ============================================================================
@@ -137,14 +152,6 @@ impl ReadSituationMessagesTool {
         format!("{:02}:{:02}:{:02}", h, m, s)
     }
 
-    /// Extract the last component of a path for display.
-    fn session_basename(session_id: &str) -> &str {
-        std::path::Path::new(session_id)
-            .file_name()
-            .and_then(|f| f.to_str())
-            .unwrap_or(session_id)
-    }
-
     fn format_messages(msgs: &[SituationMessage], show_session: bool) -> String {
         if msgs.is_empty() {
             return "No recent situation messages.".to_string();
@@ -153,7 +160,7 @@ impl ReadSituationMessagesTool {
         for msg in msgs {
             let time_str = Self::format_time(msg.timestamp);
             if show_session {
-                let basename = Self::session_basename(&msg.session_id);
+                let basename = session_basename(&msg.session_id);
                 output.push_str(&format!(
                     "[{}] ({}) [{}] {}\n",
                     time_str, msg.source, basename, msg.text
@@ -172,16 +179,17 @@ impl ToolHandler for ReadSituationMessagesTool {
     }
 
     fn description(&self) -> &str {
-        "Read recent system situation messages from Claude Code events, hooks, and MCP tools. \
-         Pass session_id (working directory path) to filter by a specific Claude Code session."
+        "Read recent situation messages from Claude Code sessions (10-min window). \
+         Each message is prefixed with [Claude Code <project>]. \
+         Filter by session name, paginate with offset/limit (default 50)."
     }
 
-    fn dynamic_description(&self) -> Option<String> {
+    fn dynamic_state(&self) -> Option<String> {
         let count = self.messages.count();
         if count == 0 {
             return None;
         }
-        let sessions = self.messages.session_ids();
+        let sessions = self.messages.session_ids(); // newest first
         let last_str = self
             .messages
             .last_timestamp()
@@ -189,15 +197,17 @@ impl ToolHandler for ReadSituationMessagesTool {
             .unwrap_or_else(|| "?".to_string());
 
         let session_info = if sessions.len() <= 1 {
-            String::new()
+            let label = sessions.first()
+                .map(|s| session_basename(s))
+                .unwrap_or("?");
+            format!(", Claude Code on {}", label)
         } else {
-            let names: Vec<&str> = sessions.iter().map(|s| Self::session_basename(s)).collect();
-            format!(", sessions: {}", names.join(", "))
+            let names: Vec<&str> = sessions.iter().map(|s| session_basename(s)).collect();
+            format!(", Claude Code sessions: {}", names.join(", "))
         };
 
         Some(format!(
-            "Read recent system situation messages from Claude Code events, hooks, and MCP tools. \
-             [{} message{}, last at {}{}]",
+            "{} message{}, last at {}{}",
             count,
             if count == 1 { "" } else { "s" },
             last_str,
@@ -209,9 +219,17 @@ impl ToolHandler for ReadSituationMessagesTool {
         serde_json::json!({
             "type": "object",
             "properties": {
-                "session_id": {
+                "session": {
                     "type": "string",
-                    "description": "Filter by session (working directory path). Omit to read all sessions."
+                    "description": "Filter by partial match on session path or project name (case-insensitive). E.g. \"voice-agent\", \"go-gennai-cli\", \"claude\"."
+                },
+                "offset": {
+                    "type": "integer",
+                    "description": "Skip first N messages (0-based, default: 0). Messages are oldest-first."
+                },
+                "limit": {
+                    "type": "integer",
+                    "description": "Maximum number of messages to return (default: 50)"
                 }
             },
             "required": []
@@ -219,19 +237,33 @@ impl ToolHandler for ReadSituationMessagesTool {
     }
 
     fn call(&self, args: serde_json::Value) -> Result<crate::tool::ToolResult, AgentError> {
-        let session_id = args
-            .get("session_id")
-            .and_then(|v| v.as_str());
+        let query = args.get("session").and_then(|v| v.as_str());
+        let offset = args.get("offset").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
+        let limit = args.get("limit").and_then(|v| v.as_u64()).unwrap_or(50) as usize;
 
-        let msgs = if let Some(sid) = session_id {
-            self.messages.read_by_session(sid)
+        let all_msgs = if let Some(q) = query {
+            self.messages.read_by_session(q)
         } else {
             self.messages.read_all()
         };
 
+        let total = all_msgs.len();
+        let start = offset.min(total);
+        let end = (start + limit).min(total);
+        let msgs = &all_msgs[start..end];
+
         let sessions = self.messages.session_ids();
-        let show_session = sessions.len() > 1 && session_id.is_none();
-        Ok(crate::tool::ToolResult::text(Self::format_messages(&msgs, show_session)))
+        let show_session = sessions.len() > 1 && query.is_none();
+        let mut output = Self::format_messages(msgs, show_session);
+
+        if end < total {
+            output.push_str(&format!(
+                "\n... (showing {}-{} of {}. Use offset={} to see more.)\n",
+                start + 1, end, total, end
+            ));
+        }
+
+        Ok(crate::tool::ToolResult::text(output))
     }
 }
 
@@ -280,35 +312,65 @@ mod tests {
     }
 
     #[test]
-    fn test_read_by_session() {
+    fn test_read_by_session_partial_match() {
         let store = SituationMessages::new(Duration::from_secs(60));
-        store.push("a1".into(), "hook".into(), "/project/a".into());
-        store.push("b1".into(), "hook".into(), "/project/b".into());
-        store.push("a2".into(), "hook".into(), "/project/a".into());
+        store.push("a1".into(), "hook".into(), "/home/user/voice-agent".into());
+        store.push("b1".into(), "hook".into(), "/home/user/go-gennai-cli".into());
+        store.push("a2".into(), "hook".into(), "/home/user/voice-agent".into());
 
-        let a_msgs = store.read_by_session("/project/a");
+        // Partial match on basename
+        let a_msgs = store.read_by_session("voice-agent");
         assert_eq!(a_msgs.len(), 2);
         assert_eq!(a_msgs[0].text, "a1");
         assert_eq!(a_msgs[1].text, "a2");
 
-        let b_msgs = store.read_by_session("/project/b");
+        // Partial match on substring
+        let a_msgs = store.read_by_session("voice");
+        assert_eq!(a_msgs.len(), 2);
+
+        // Case-insensitive
+        let b_msgs = store.read_by_session("GENNAI");
         assert_eq!(b_msgs.len(), 1);
         assert_eq!(b_msgs[0].text, "b1");
 
-        assert!(store.read_by_session("/project/c").is_empty());
+        // No match
+        assert!(store.read_by_session("nonexistent").is_empty());
     }
 
     #[test]
-    fn test_session_ids() {
+    fn test_session_ids_newest_first() {
         let store = SituationMessages::new(Duration::from_secs(60));
-        store.push("a1".into(), "hook".into(), "/project/a".into());
-        store.push("b1".into(), "hook".into(), "/project/b".into());
-        store.push("a2".into(), "hook".into(), "/project/a".into());
+        store.push("a1".into(), "hook".into(), "/project/alpha".into());
+        store.push("b1".into(), "hook".into(), "/project/beta".into());
+        store.push("a2".into(), "hook".into(), "/project/alpha".into());
 
         let ids = store.session_ids();
         assert_eq!(ids.len(), 2);
-        assert_eq!(ids[0], "/project/a");
-        assert_eq!(ids[1], "/project/b");
+        // alpha has the most recent message, so it comes first
+        assert_eq!(ids[0], "/project/alpha");
+        assert_eq!(ids[1], "/project/beta");
+    }
+
+    #[test]
+    fn test_session_ids_order_changes_with_activity() {
+        let store = SituationMessages::new(Duration::from_secs(60));
+        store.push("a1".into(), "hook".into(), "/project/alpha".into());
+        store.push("b1".into(), "hook".into(), "/project/beta".into());
+
+        // beta is newest
+        let ids = store.session_ids();
+        assert_eq!(ids[0], "/project/beta");
+
+        // now alpha gets a new message
+        store.push("a2".into(), "hook".into(), "/project/alpha".into());
+        let ids = store.session_ids();
+        assert_eq!(ids[0], "/project/alpha");
+    }
+
+    #[test]
+    fn test_default_ttl_is_10_min() {
+        let store = SituationMessages::default();
+        assert_eq!(store.ttl, Duration::from_secs(600));
     }
 
     #[test]
@@ -330,45 +392,57 @@ mod tests {
     }
 
     #[test]
-    fn test_tool_call_filter_by_session() {
+    fn test_tool_call_filter_by_partial_session() {
         let store = Arc::new(SituationMessages::default());
-        store.push("a-event".into(), "hook".into(), "/project/a".into());
-        store.push("b-event".into(), "hook".into(), "/project/b".into());
+        store.push("a-event".into(), "hook".into(), "/home/user/voice-agent".into());
+        store.push("b-event".into(), "hook".into(), "/home/user/go-gennai-cli".into());
         let tool = ReadSituationMessagesTool::new(store);
 
-        let result = tool.call(serde_json::json!({"session_id": "/project/a"})).unwrap().text;
+        // Filter by partial match
+        let result = tool.call(serde_json::json!({"session": "voice"})).unwrap().text;
         assert!(result.contains("a-event"));
         assert!(!result.contains("b-event"));
 
+        let result = tool.call(serde_json::json!({"session": "gennai"})).unwrap().text;
+        assert!(!result.contains("a-event"));
+        assert!(result.contains("b-event"));
+
+        // No filter shows all with session labels
         let result = tool.call(serde_json::json!({})).unwrap().text;
         assert!(result.contains("a-event"));
         assert!(result.contains("b-event"));
-        // Multi-session output shows session basename
-        assert!(result.contains("[a]"));
-        assert!(result.contains("[b]"));
+        assert!(result.contains("[voice-agent]"));
+        assert!(result.contains("[go-gennai-cli]"));
     }
 
     #[test]
-    fn test_dynamic_description() {
+    fn test_dynamic_state() {
         let store = Arc::new(SituationMessages::default());
         let tool = ReadSituationMessagesTool::new(Arc::clone(&store));
-        assert!(tool.dynamic_description().is_none());
+        assert!(tool.dynamic_state().is_none());
 
-        store.push("test".into(), "hook".into(), "/p".into());
-        let desc = tool.dynamic_description().unwrap();
-        assert!(desc.contains("1 message,"));
+        store.push("test".into(), "hook".into(), "/project/myapp".into());
+        let state = tool.dynamic_state().unwrap();
+        assert!(state.contains("1 message,"));
+        assert!(state.contains("Claude Code on myapp"));
+
+        // full_description combines static + dynamic
+        let full = crate::tool::full_description(&tool);
+        assert!(full.starts_with("Read recent situation messages"));
+        assert!(full.contains("[1 message,"));
     }
 
     #[test]
-    fn test_dynamic_description_multi_session() {
+    fn test_dynamic_state_multi_session_newest_first() {
         let store = Arc::new(SituationMessages::default());
         let tool = ReadSituationMessagesTool::new(Arc::clone(&store));
 
         store.push("a".into(), "hook".into(), "/project/alpha".into());
         store.push("b".into(), "hook".into(), "/project/beta".into());
 
-        let desc = tool.dynamic_description().unwrap();
-        assert!(desc.contains("2 messages"));
-        assert!(desc.contains("sessions: alpha, beta"));
+        let state = tool.dynamic_state().unwrap();
+        assert!(state.contains("2 messages"));
+        // beta is newer, so it comes first
+        assert!(state.contains("Claude Code sessions: beta, alpha"));
     }
 }

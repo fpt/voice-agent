@@ -61,11 +61,30 @@ fn main() {
     // Create tool registry
     let skill_registry = std::sync::Arc::new(agent_core::skill::SkillRegistry::new());
     let situation = std::sync::Arc::new(agent_core::situation::SituationMessages::default());
-    let tool_registry = agent_core::tool::create_default_registry(
+    let mut tool_registry = agent_core::tool::create_default_registry(
         std::path::PathBuf::from(&working_dir),
         skill_registry,
         situation,
     );
+
+    // Connect MCP servers from MCP_SERVERS env (comma-separated "command arg1 arg2,...")
+    if let Ok(mcp_spec) = std::env::var("MCP_SERVERS") {
+        for entry in mcp_spec.split(',') {
+            let parts: Vec<&str> = entry.trim().split_whitespace().collect();
+            if let Some((cmd, args)) = parts.split_first() {
+                match agent_core::mcp_client::McpClient::connect(cmd, args) {
+                    Ok(client) => {
+                        for handler in client.tool_handlers() {
+                            tool_registry.register(handler);
+                        }
+                    }
+                    Err(e) => {
+                        eprintln!("Failed to connect MCP server '{}': {}", cmd, e);
+                    }
+                }
+            }
+        }
+    }
 
     let provider_name = if model_path.is_some() {
         "Local (FFI)"
@@ -141,11 +160,17 @@ fn main() {
         }
 
         match result {
-            Ok((response, reasoning)) => {
+            Ok((response, reasoning, usage)) => {
                 if let Some(ref thinking) = reasoning {
                     eprintln!("\x1b[90m💭 {}\x1b[0m", thinking);
                 }
                 println!("{}", response);
+                if usage.total_tokens > 0 {
+                    eprintln!(
+                        "\x1b[90m📊 tokens: in={}, out={}, total={}\x1b[0m",
+                        usage.input_tokens, usage.output_tokens, usage.total_tokens
+                    );
+                }
 
                 // Add assistant response to conversation history
                 messages.push(ChatMessage::assistant(response));

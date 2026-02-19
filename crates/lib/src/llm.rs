@@ -5,6 +5,23 @@ use serde::{Deserialize, Serialize};
 // Core types
 // ============================================================================
 
+/// Token usage information from an LLM API call
+#[derive(Debug, Clone, Default)]
+pub struct TokenUsage {
+    pub input_tokens: u64,
+    pub output_tokens: u64,
+    pub total_tokens: u64,
+}
+
+impl TokenUsage {
+    /// Accumulate usage from another call
+    pub fn add(&mut self, other: &TokenUsage) {
+        self.input_tokens += other.input_tokens;
+        self.output_tokens += other.output_tokens;
+        self.total_tokens += other.total_tokens;
+    }
+}
+
 /// Chat message role
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
@@ -136,8 +153,9 @@ pub enum LlmResponse {
     Text {
         content: String,
         reasoning: Option<String>,
+        usage: Option<TokenUsage>,
     },
-    ToolCalls(Vec<ToolCallInfo>),
+    ToolCalls(Vec<ToolCallInfo>, Option<TokenUsage>),
 }
 
 // ============================================================================
@@ -265,6 +283,16 @@ struct ResponsesResponse {
     output: Vec<ResponseOutput>,
     #[serde(default)]
     incomplete_details: Option<IncompleteDetails>,
+    #[serde(default)]
+    usage: Option<ResponseUsage>,
+}
+
+/// Token usage from the Responses API
+#[derive(Debug, Deserialize)]
+struct ResponseUsage {
+    input_tokens: u64,
+    output_tokens: u64,
+    total_tokens: u64,
 }
 
 #[derive(Debug, Deserialize)]
@@ -625,6 +653,15 @@ impl OpenAiProvider {
         }
     }
 
+    /// Convert API usage to TokenUsage
+    fn convert_usage(usage: &Option<ResponseUsage>) -> Option<TokenUsage> {
+        usage.as_ref().map(|u| TokenUsage {
+            input_tokens: u.input_tokens,
+            output_tokens: u.output_tokens,
+            total_tokens: u.total_tokens,
+        })
+    }
+
     /// Extract tool calls from response output
     fn extract_tool_calls(output: &[ResponseOutput]) -> Vec<ToolCallInfo> {
         output
@@ -733,12 +770,20 @@ impl LlmProvider for OpenAiProvider {
         tracing::debug!("Sending chat_with_tools request to OpenAI Responses API");
 
         let response = self.send_request(&request)?;
+        let usage = Self::convert_usage(&response.usage);
+
+        if let Some(ref u) = usage {
+            tracing::info!(
+                "Token usage: input={}, output={}, total={}",
+                u.input_tokens, u.output_tokens, u.total_tokens
+            );
+        }
 
         // Check for tool calls first
         let tool_calls = Self::extract_tool_calls(&response.output);
         if !tool_calls.is_empty() {
             tracing::info!("OpenAI returned {} tool calls", tool_calls.len());
-            return Ok(LlmResponse::ToolCalls(tool_calls));
+            return Ok(LlmResponse::ToolCalls(tool_calls, usage));
         }
 
         // Text response
@@ -753,6 +798,7 @@ impl LlmProvider for OpenAiProvider {
         Ok(LlmResponse::Text {
             content: text,
             reasoning,
+            usage,
         })
     }
 }

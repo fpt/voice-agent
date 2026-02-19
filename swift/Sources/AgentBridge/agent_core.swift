@@ -754,13 +754,15 @@ public struct AgentConfig {
     public var useHarmonyTemplate: Bool
     public var temperature: Float?
     public var maxTokens: UInt32
+    public var contextWindow: UInt32
     public var language: String?
     public var workingDir: String?
     public var reasoningEffort: String?
+    public var mcpServers: [McpServerConfig]
 
     // Default memberwise initializers are never public by default, so we
     // declare one manually.
-    public init(modelPath: String?, baseUrl: String, model: String, apiKey: String?, useHarmonyTemplate: Bool, temperature: Float?, maxTokens: UInt32, language: String?, workingDir: String?, reasoningEffort: String?) {
+    public init(modelPath: String?, baseUrl: String, model: String, apiKey: String?, useHarmonyTemplate: Bool, temperature: Float?, maxTokens: UInt32, contextWindow: UInt32, language: String?, workingDir: String?, reasoningEffort: String?, mcpServers: [McpServerConfig]) {
         self.modelPath = modelPath
         self.baseUrl = baseUrl
         self.model = model
@@ -768,9 +770,11 @@ public struct AgentConfig {
         self.useHarmonyTemplate = useHarmonyTemplate
         self.temperature = temperature
         self.maxTokens = maxTokens
+        self.contextWindow = contextWindow
         self.language = language
         self.workingDir = workingDir
         self.reasoningEffort = reasoningEffort
+        self.mcpServers = mcpServers
     }
 }
 
@@ -799,6 +803,9 @@ extension AgentConfig: Equatable, Hashable {
         if lhs.maxTokens != rhs.maxTokens {
             return false
         }
+        if lhs.contextWindow != rhs.contextWindow {
+            return false
+        }
         if lhs.language != rhs.language {
             return false
         }
@@ -806,6 +813,9 @@ extension AgentConfig: Equatable, Hashable {
             return false
         }
         if lhs.reasoningEffort != rhs.reasoningEffort {
+            return false
+        }
+        if lhs.mcpServers != rhs.mcpServers {
             return false
         }
         return true
@@ -819,9 +829,11 @@ extension AgentConfig: Equatable, Hashable {
         hasher.combine(useHarmonyTemplate)
         hasher.combine(temperature)
         hasher.combine(maxTokens)
+        hasher.combine(contextWindow)
         hasher.combine(language)
         hasher.combine(workingDir)
         hasher.combine(reasoningEffort)
+        hasher.combine(mcpServers)
     }
 }
 
@@ -840,9 +852,11 @@ public struct FfiConverterTypeAgentConfig: FfiConverterRustBuffer {
                 useHarmonyTemplate: FfiConverterBool.read(from: &buf), 
                 temperature: FfiConverterOptionFloat.read(from: &buf), 
                 maxTokens: FfiConverterUInt32.read(from: &buf), 
+                contextWindow: FfiConverterUInt32.read(from: &buf), 
                 language: FfiConverterOptionString.read(from: &buf), 
                 workingDir: FfiConverterOptionString.read(from: &buf), 
-                reasoningEffort: FfiConverterOptionString.read(from: &buf)
+                reasoningEffort: FfiConverterOptionString.read(from: &buf), 
+                mcpServers: FfiConverterSequenceTypeMcpServerConfig.read(from: &buf)
         )
     }
 
@@ -854,9 +868,11 @@ public struct FfiConverterTypeAgentConfig: FfiConverterRustBuffer {
         FfiConverterBool.write(value.useHarmonyTemplate, into: &buf)
         FfiConverterOptionFloat.write(value.temperature, into: &buf)
         FfiConverterUInt32.write(value.maxTokens, into: &buf)
+        FfiConverterUInt32.write(value.contextWindow, into: &buf)
         FfiConverterOptionString.write(value.language, into: &buf)
         FfiConverterOptionString.write(value.workingDir, into: &buf)
         FfiConverterOptionString.write(value.reasoningEffort, into: &buf)
+        FfiConverterSequenceTypeMcpServerConfig.write(value.mcpServers, into: &buf)
     }
 }
 
@@ -882,15 +898,23 @@ public struct AgentResponse {
     public var isFinal: Bool
     public var keywords: [String]?
     public var reasoning: String?
+    public var inputTokens: UInt64
+    public var outputTokens: UInt64
+    public var totalTokens: UInt64
+    public var contextPercent: Float
 
     // Default memberwise initializers are never public by default, so we
     // declare one manually.
-    public init(content: String, role: String, isFinal: Bool, keywords: [String]?, reasoning: String?) {
+    public init(content: String, role: String, isFinal: Bool, keywords: [String]?, reasoning: String?, inputTokens: UInt64, outputTokens: UInt64, totalTokens: UInt64, contextPercent: Float) {
         self.content = content
         self.role = role
         self.isFinal = isFinal
         self.keywords = keywords
         self.reasoning = reasoning
+        self.inputTokens = inputTokens
+        self.outputTokens = outputTokens
+        self.totalTokens = totalTokens
+        self.contextPercent = contextPercent
     }
 }
 
@@ -913,6 +937,18 @@ extension AgentResponse: Equatable, Hashable {
         if lhs.reasoning != rhs.reasoning {
             return false
         }
+        if lhs.inputTokens != rhs.inputTokens {
+            return false
+        }
+        if lhs.outputTokens != rhs.outputTokens {
+            return false
+        }
+        if lhs.totalTokens != rhs.totalTokens {
+            return false
+        }
+        if lhs.contextPercent != rhs.contextPercent {
+            return false
+        }
         return true
     }
 
@@ -922,6 +958,10 @@ extension AgentResponse: Equatable, Hashable {
         hasher.combine(isFinal)
         hasher.combine(keywords)
         hasher.combine(reasoning)
+        hasher.combine(inputTokens)
+        hasher.combine(outputTokens)
+        hasher.combine(totalTokens)
+        hasher.combine(contextPercent)
     }
 }
 
@@ -937,7 +977,11 @@ public struct FfiConverterTypeAgentResponse: FfiConverterRustBuffer {
                 role: FfiConverterString.read(from: &buf), 
                 isFinal: FfiConverterBool.read(from: &buf), 
                 keywords: FfiConverterOptionSequenceString.read(from: &buf), 
-                reasoning: FfiConverterOptionString.read(from: &buf)
+                reasoning: FfiConverterOptionString.read(from: &buf), 
+                inputTokens: FfiConverterUInt64.read(from: &buf), 
+                outputTokens: FfiConverterUInt64.read(from: &buf), 
+                totalTokens: FfiConverterUInt64.read(from: &buf), 
+                contextPercent: FfiConverterFloat.read(from: &buf)
         )
     }
 
@@ -947,6 +991,10 @@ public struct FfiConverterTypeAgentResponse: FfiConverterRustBuffer {
         FfiConverterBool.write(value.isFinal, into: &buf)
         FfiConverterOptionSequenceString.write(value.keywords, into: &buf)
         FfiConverterOptionString.write(value.reasoning, into: &buf)
+        FfiConverterUInt64.write(value.inputTokens, into: &buf)
+        FfiConverterUInt64.write(value.outputTokens, into: &buf)
+        FfiConverterUInt64.write(value.totalTokens, into: &buf)
+        FfiConverterFloat.write(value.contextPercent, into: &buf)
     }
 }
 
@@ -1085,6 +1133,72 @@ public func FfiConverterTypeCaptureRequest_lift(_ buf: RustBuffer) throws -> Cap
 #endif
 public func FfiConverterTypeCaptureRequest_lower(_ value: CaptureRequest) -> RustBuffer {
     return FfiConverterTypeCaptureRequest.lower(value)
+}
+
+
+public struct McpServerConfig {
+    public var command: String
+    public var args: [String]
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(command: String, args: [String]) {
+        self.command = command
+        self.args = args
+    }
+}
+
+
+
+extension McpServerConfig: Equatable, Hashable {
+    public static func ==(lhs: McpServerConfig, rhs: McpServerConfig) -> Bool {
+        if lhs.command != rhs.command {
+            return false
+        }
+        if lhs.args != rhs.args {
+            return false
+        }
+        return true
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(command)
+        hasher.combine(args)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeMcpServerConfig: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> McpServerConfig {
+        return
+            try McpServerConfig(
+                command: FfiConverterString.read(from: &buf), 
+                args: FfiConverterSequenceString.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: McpServerConfig, into buf: inout [UInt8]) {
+        FfiConverterString.write(value.command, into: &buf)
+        FfiConverterSequenceString.write(value.args, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeMcpServerConfig_lift(_ buf: RustBuffer) throws -> McpServerConfig {
+    return try FfiConverterTypeMcpServerConfig.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeMcpServerConfig_lower(_ value: McpServerConfig) -> RustBuffer {
+    return FfiConverterTypeMcpServerConfig.lower(value)
 }
 
 
@@ -1355,6 +1469,31 @@ fileprivate struct FfiConverterSequenceTypeCaptureRequest: FfiConverterRustBuffe
         seq.reserveCapacity(Int(len))
         for _ in 0 ..< len {
             seq.append(try FfiConverterTypeCaptureRequest.read(from: &buf))
+        }
+        return seq
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+fileprivate struct FfiConverterSequenceTypeMcpServerConfig: FfiConverterRustBuffer {
+    typealias SwiftType = [McpServerConfig]
+
+    public static func write(_ value: [McpServerConfig], into buf: inout [UInt8]) {
+        let len = Int32(value.count)
+        writeInt(&buf, len)
+        for item in value {
+            FfiConverterTypeMcpServerConfig.write(item, into: &buf)
+        }
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> [McpServerConfig] {
+        let len: Int32 = try readInt(&buf)
+        var seq = [McpServerConfig]()
+        seq.reserveCapacity(Int(len))
+        for _ in 0 ..< len {
+            seq.append(try FfiConverterTypeMcpServerConfig.read(from: &buf))
         }
         return seq
     }

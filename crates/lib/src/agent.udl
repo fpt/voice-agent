@@ -11,6 +11,11 @@ enum AgentError {
     "InternalError",
 };
 
+dictionary McpServerConfig {
+    string command;
+    sequence<string> args;
+};
+
 dictionary AgentConfig {
     string? model_path;
     string base_url;
@@ -19,9 +24,11 @@ dictionary AgentConfig {
     boolean use_harmony_template;
     f32? temperature;
     u32 max_tokens;
+    u32 context_window;
     string? language;
     string? working_dir;
     string? reasoning_effort;
+    sequence<McpServerConfig> mcp_servers;
 };
 
 dictionary AgentResponse {
@@ -30,6 +37,10 @@ dictionary AgentResponse {
     boolean is_final;
     sequence<string>? keywords;
     string? reasoning;
+    u64 input_tokens;
+    u64 output_tokens;
+    u64 total_tokens;
+    f32 context_percent;
 };
 
 dictionary CaptureRequest {

@@ -1,8 +1,6 @@
 use crate::llm::{ChatMessage, ChatRole};
-use crate::state_capsule::StateCapsule;
 
 /// Backchannel marker in message history
-/// This is the "⟂" marker mentioned in the design
 const BACKCHANNEL_MARKER: &str = "⟂";
 
 /// Message with backchannel flag
@@ -12,13 +10,11 @@ struct MessageEntry {
     is_backchannel: bool,
 }
 
-/// Conversation memory manager with State Capsule
+/// Conversation memory manager.
 #[derive(Debug, Clone)]
 pub struct ConversationMemory {
     messages: Vec<MessageEntry>,
     max_messages: usize,
-    /// State capsule for compact context
-    pub state_capsule: StateCapsule,
 }
 
 impl ConversationMemory {
@@ -32,7 +28,6 @@ impl ConversationMemory {
         Self {
             messages: Vec::new(),
             max_messages,
-            state_capsule: StateCapsule::default(),
         }
     }
 
@@ -46,7 +41,7 @@ impl ConversationMemory {
     }
 
     /// Add a backchannel marker to the conversation
-    /// This is for tempo tracking only - doesn't pollute context
+    /// This is for tempo tracking only — doesn't pollute context
     pub fn add_backchannel(&mut self) {
         self.messages.push(MessageEntry {
             message: ChatMessage::assistant(BACKCHANNEL_MARKER.to_string()),
@@ -103,7 +98,6 @@ impl ConversationMemory {
     }
 
     /// Get all messages including backchannel markers
-    /// Useful for debugging or tempo analysis
     pub fn get_messages_with_backchannels(&self) -> Vec<ChatMessage> {
         self.messages.iter().map(|e| e.message.clone()).collect()
     }
@@ -122,25 +116,38 @@ impl ConversationMemory {
             .collect()
     }
 
-    /// Update state capsule (called by state updater)
-    pub fn update_state_capsule(&mut self, capsule: StateCapsule) {
-        self.state_capsule = capsule;
+    /// Estimate total token count of non-backchannel messages (~4 chars/token + per-message overhead).
+    pub fn estimate_tokens(&self) -> usize {
+        self.messages
+            .iter()
+            .filter(|e| !e.is_backchannel)
+            .map(|e| e.message.content.len() / 4 + 10)
+            .sum()
     }
 
-    /// Get current state capsule
-    pub fn get_state_capsule(&self) -> &StateCapsule {
-        &self.state_capsule
+    /// Drop oldest non-system messages until estimated tokens < `target_tokens`.
+    /// Returns the number of messages dropped.
+    pub fn compact(&mut self, target_tokens: usize) -> usize {
+        let mut dropped = 0;
+        while self.estimate_tokens() > target_tokens {
+            // Find the first non-system, non-backchannel message
+            let pos = self.messages.iter().position(|e| {
+                !e.is_backchannel && e.message.role != ChatRole::System
+            });
+            match pos {
+                Some(i) => {
+                    self.messages.remove(i);
+                    dropped += 1;
+                }
+                None => break, // Only system/backchannel messages left
+            }
+        }
+        dropped
     }
 
-    /// Get state capsule as prompt fragment for LLM
-    pub fn get_state_prompt(&self) -> String {
-        self.state_capsule.to_prompt_fragment()
-    }
-
-    /// Clear all messages and reset state
+    /// Clear all messages
     pub fn clear(&mut self) {
         self.messages.clear();
-        self.state_capsule.clear();
     }
 
     /// Get the number of messages (excluding backchannel markers)
@@ -182,6 +189,48 @@ mod tests {
         memory.add_message(ChatMessage::user("Hello".to_string()));
         memory.clear();
         assert_eq!(memory.len(), 0);
+    }
+
+    #[test]
+    fn test_compact_drops_oldest_non_system() {
+        let mut memory = ConversationMemory::new();
+        memory.add_message(ChatMessage::system("System prompt".to_string()));
+        // Each 400-char message ≈ 110 estimated tokens (400/4 + 10)
+        for i in 0..10 {
+            let msg = format!("Message {} {}", i, "x".repeat(380));
+            memory.add_message(ChatMessage::user(msg));
+        }
+
+        let before = memory.len();
+        assert_eq!(before, 11); // 1 system + 10 user
+
+        // Compact to ~500 tokens — should keep system + a few user messages
+        let dropped = memory.compact(500);
+        assert!(dropped > 0);
+
+        let messages = memory.get_messages();
+        // System message must survive
+        assert_eq!(messages[0].role, ChatRole::System);
+        // Remaining messages should be the newest ones
+        let last = &messages[messages.len() - 1];
+        assert!(last.content.starts_with("Message 9"));
+    }
+
+    #[test]
+    fn test_compact_preserves_all_when_under_target() {
+        let mut memory = ConversationMemory::new();
+        memory.add_message(ChatMessage::user("short".to_string()));
+        let dropped = memory.compact(10000);
+        assert_eq!(dropped, 0);
+        assert_eq!(memory.len(), 1);
+    }
+
+    #[test]
+    fn test_estimate_tokens() {
+        let mut memory = ConversationMemory::new();
+        memory.add_message(ChatMessage::user("x".repeat(400).to_string()));
+        // 400 chars / 4 + 10 overhead = 110
+        assert_eq!(memory.estimate_tokens(), 110);
     }
 
     #[test]

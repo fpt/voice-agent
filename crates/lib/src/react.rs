@@ -1,4 +1,4 @@
-use crate::llm::{ChatMessage, LlmProvider, LlmResponse, ToolCallInfo};
+use crate::llm::{ChatMessage, LlmProvider, LlmResponse, TokenUsage, ToolCallInfo};
 use crate::tool::{ToolAccess, ToolResult};
 use crate::AgentError;
 
@@ -6,15 +6,16 @@ const DEFAULT_MAX_ITERATIONS: u32 = 10;
 
 /// Run a ReAct (Reason+Act) loop: call LLM with tools, execute tool calls, repeat until text response.
 ///
-/// Returns the final text response and optional reasoning from the LLM.
+/// Returns the final text response, optional reasoning, and accumulated token usage.
 pub fn run(
     client: &dyn LlmProvider,
     messages: &mut Vec<ChatMessage>,
     tools: &dyn ToolAccess,
     max_iterations: Option<u32>,
-) -> Result<(String, Option<String>), AgentError> {
+) -> Result<(String, Option<String>, TokenUsage), AgentError> {
     let max_iter = max_iterations.unwrap_or(DEFAULT_MAX_ITERATIONS);
     let tool_defs = tools.get_definitions();
+    let mut total_usage = TokenUsage::default();
 
     for iteration in 0..max_iter {
         tracing::info!("ReAct iteration {}/{}", iteration + 1, max_iter);
@@ -24,11 +25,20 @@ pub fn run(
             .map_err(|e| AgentError::NetworkError(e.to_string()))?;
 
         match response {
-            LlmResponse::Text { content, reasoning } => {
-                tracing::info!("ReAct complete: text response after {} iterations", iteration + 1);
-                return Ok((content, reasoning));
+            LlmResponse::Text { content, reasoning, usage } => {
+                if let Some(ref u) = usage {
+                    total_usage.add(u);
+                }
+                tracing::info!(
+                    "ReAct complete: text response after {} iterations (tokens: in={}, out={}, total={})",
+                    iteration + 1, total_usage.input_tokens, total_usage.output_tokens, total_usage.total_tokens
+                );
+                return Ok((content, reasoning, total_usage));
             }
-            LlmResponse::ToolCalls(calls) => {
+            LlmResponse::ToolCalls(calls, usage) => {
+                if let Some(ref u) = usage {
+                    total_usage.add(u);
+                }
                 tracing::info!(
                     "ReAct iteration {}: {} tool call(s)",
                     iteration + 1,
@@ -127,18 +137,20 @@ mod tests {
                 // We need to clone the response — reconstruct it
                 let resp = &self.responses[idx];
                 match resp {
-                    LlmResponse::Text { content, reasoning } => Ok(LlmResponse::Text {
+                    LlmResponse::Text { content, reasoning, usage } => Ok(LlmResponse::Text {
                         content: content.clone(),
                         reasoning: reasoning.clone(),
+                        usage: usage.clone(),
                     }),
-                    LlmResponse::ToolCalls(calls) => {
-                        Ok(LlmResponse::ToolCalls(calls.clone()))
+                    LlmResponse::ToolCalls(calls, usage) => {
+                        Ok(LlmResponse::ToolCalls(calls.clone(), usage.clone()))
                     }
                 }
             } else {
                 Ok(LlmResponse::Text {
                     content: "fallback".to_string(),
                     reasoning: None,
+                    usage: None,
                 })
             }
         }
@@ -149,13 +161,15 @@ mod tests {
         let provider = MockProvider::new(vec![LlmResponse::Text {
             content: "Hello!".to_string(),
             reasoning: None,
+            usage: None,
         }]);
         let mut messages = vec![ChatMessage::user("Hi".to_string())];
         let tools = ToolRegistry::new();
 
-        let (text, reasoning) = run(&provider, &mut messages, &tools, Some(5)).unwrap();
+        let (text, reasoning, usage) = run(&provider, &mut messages, &tools, Some(5)).unwrap();
         assert_eq!(text, "Hello!");
         assert!(reasoning.is_none());
+        assert_eq!(usage.total_tokens, 0);
     }
 
     #[test]
@@ -165,10 +179,11 @@ mod tests {
                 id: "call_1".to_string(),
                 name: "tasks".to_string(),
                 arguments: serde_json::json!({"action": "list"}),
-            }]),
+            }], None),
             LlmResponse::Text {
                 content: "There are no tasks.".to_string(),
                 reasoning: None,
+                usage: None,
             },
         ]);
 
@@ -179,7 +194,7 @@ mod tests {
         let mut tools = ToolRegistry::new();
         tools.register(Box::new(TaskTool::new()));
 
-        let (text, _) = run(&provider, &mut messages, &tools, Some(5)).unwrap();
+        let (text, _, _) = run(&provider, &mut messages, &tools, Some(5)).unwrap();
         assert_eq!(text, "There are no tasks.");
 
         // Messages should contain: user, assistant(tool_calls), tool_result
@@ -221,10 +236,11 @@ mod tests {
                 id: "call_img".to_string(),
                 name: "capture_screen".to_string(),
                 arguments: serde_json::json!({"process_name": "Chrome"}),
-            }]),
+            }], None),
             LlmResponse::Text {
                 content: "I can see a Chrome window.".to_string(),
                 reasoning: None,
+                usage: None,
             },
         ]);
 
@@ -232,7 +248,7 @@ mod tests {
         let mut tools = ToolRegistry::new();
         tools.register(Box::new(MockImageTool));
 
-        let (text, _) = run(&provider, &mut messages, &tools, Some(5)).unwrap();
+        let (text, _, _) = run(&provider, &mut messages, &tools, Some(5)).unwrap();
         assert_eq!(text, "I can see a Chrome window.");
 
         // Messages: user, assistant(tool_calls), tool_result_with_images
@@ -256,10 +272,11 @@ mod tests {
                 id: "call_1".to_string(),
                 name: "tasks".to_string(),
                 arguments: serde_json::json!({"action": "list"}),
-            }]),
+            }], None),
             LlmResponse::Text {
                 content: "done".to_string(),
                 reasoning: None,
+                usage: None,
             },
         ]);
 
@@ -283,17 +300,17 @@ mod tests {
                 id: "call_1".to_string(),
                 name: "tasks".to_string(),
                 arguments: serde_json::json!({"action": "list"}),
-            }]),
+            }], None),
             LlmResponse::ToolCalls(vec![ToolCallInfo {
                 id: "call_2".to_string(),
                 name: "tasks".to_string(),
                 arguments: serde_json::json!({"action": "list"}),
-            }]),
+            }], None),
             LlmResponse::ToolCalls(vec![ToolCallInfo {
                 id: "call_3".to_string(),
                 name: "tasks".to_string(),
                 arguments: serde_json::json!({"action": "list"}),
-            }]),
+            }], None),
         ]);
 
         let mut messages = vec![ChatMessage::user("Loop forever".to_string())];

@@ -29,10 +29,18 @@ struct ContentView: View {
                     .disabled(viewModel.messages.isEmpty)
                 }
                 ToolbarItem(placement: .topBarTrailing) {
-                    Button {
-                        showSettings = true
-                    } label: {
-                        Image(systemName: "gear")
+                    HStack(spacing: 12) {
+                        if viewModel.contextPercent > 0 {
+                            Text("\(viewModel.contextPercent)%")
+                                .font(.caption)
+                                .monospacedDigit()
+                                .foregroundStyle(viewModel.contextPercent >= 90 ? .red : .secondary)
+                        }
+                        Button {
+                            showSettings = true
+                        } label: {
+                            Image(systemName: "gear")
+                        }
                     }
                 }
             }

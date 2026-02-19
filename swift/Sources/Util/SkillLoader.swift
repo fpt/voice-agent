@@ -1,6 +1,6 @@
 import Foundation
 
-/// Discovers and parses SKILL.md files from ~/.claude plugins directory.
+/// Discovers and parses SKILL.md files from configured directories.
 public struct SkillLoader {
 
     public struct SkillDefinition {
@@ -9,30 +9,24 @@ public struct SkillLoader {
         public let prompt: String
     }
 
-    /// Scan directories for SKILL.md files and parse them.
-    /// Searches: project-local `skills/` directory + `~/.claude/plugins`.
-    public static func loadAll(projectDir: String? = nil) -> [SkillDefinition] {
-        var searchDirs: [String] = []
-
-        // Project-local skills/ directory
-        if let dir = projectDir {
-            let skillsDir = "\(dir)/skills"
-            if FileManager.default.fileExists(atPath: skillsDir) {
-                searchDirs.append(skillsDir)
-            }
-        }
-
-        // ~/.claude/plugins
-        let home = FileManager.default.homeDirectoryForCurrentUser.path
-        let pluginsDir = "\(home)/.claude/plugins"
-        if FileManager.default.fileExists(atPath: pluginsDir) {
-            searchDirs.append(pluginsDir)
-        }
-
-        var results: [SkillDefinition] = []
+    /// Scan the given directories for `<skill-name>/SKILL.md` files and parse them.
+    /// Paths can be absolute or relative to `baseDir`.
+    public static func loadAll(paths: [String], baseDir: String? = nil) -> [SkillDefinition] {
         let fm = FileManager.default
+        var results: [SkillDefinition] = []
 
-        for dir in searchDirs {
+        for raw in paths {
+            let dir: String
+            if raw.hasPrefix("/") {
+                dir = raw
+            } else if let base = baseDir {
+                dir = "\(base)/\(raw)"
+            } else {
+                dir = raw
+            }
+
+            guard fm.fileExists(atPath: dir) else { continue }
+
             if let enumerator = fm.enumerator(atPath: dir) {
                 while let relativePath = enumerator.nextObject() as? String {
                     guard relativePath.hasSuffix("/SKILL.md") || relativePath == "SKILL.md" else {

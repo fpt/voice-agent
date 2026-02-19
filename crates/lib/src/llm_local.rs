@@ -17,7 +17,7 @@ use llama_cpp_2::model::{
 use llama_cpp_2::openai::OpenAIChatTemplateParams;
 use llama_cpp_2::sampling::LlamaSampler;
 
-use crate::llm::{ChatMessage, ChatRole, LlmProvider, LlmResponse, ToolCallInfo, ToolDefinition};
+use crate::llm::{ChatMessage, ChatRole, LlmProvider, LlmResponse, TokenUsage, ToolCallInfo, ToolDefinition};
 
 pub struct LlamaLocalProvider {
     backend: LlamaBackend,
@@ -194,7 +194,8 @@ impl LlamaLocalProvider {
     }
 
     /// Core generation loop. Tokenize, decode, sample until done.
-    fn generate(&self, template_result: &ChatTemplateResult) -> Result<String> {
+    /// Returns (generated_text, token_usage).
+    fn generate(&self, template_result: &ChatTemplateResult) -> Result<(String, TokenUsage)> {
         let tokens = self
             .model
             .str_to_token(&template_result.prompt, AddBos::Never)
@@ -239,6 +240,7 @@ impl LlamaLocalProvider {
 
         // Generate tokens
         let mut n_cur = batch.n_tokens();
+        let batch_start = n_cur;
         let max_tokens = n_cur + self.max_tokens as i32;
         let mut decoder = encoding_rs::UTF_8.new_decoder();
         let mut generated_text = String::new();
@@ -289,7 +291,18 @@ impl LlamaLocalProvider {
             }
         }
 
-        Ok(generated_text)
+        let n_output = (n_cur - batch_start) as u64;
+        let usage = TokenUsage {
+            input_tokens: n_prompt as u64,
+            output_tokens: n_output,
+            total_tokens: n_prompt as u64 + n_output,
+        };
+        tracing::info!(
+            "Local LLM usage: input={}, output={}, total={}",
+            usage.input_tokens, usage.output_tokens, usage.total_tokens
+        );
+
+        Ok((generated_text, usage))
     }
 
     /// Build appropriate sampler chain based on template result.
@@ -376,7 +389,7 @@ impl LlamaLocalProvider {
     }
 
     /// Parse the OpenAI-compatible JSON from parse_response_oaicompat into LlmResponse.
-    fn parse_oai_response(json_str: &str) -> Result<LlmResponse> {
+    fn parse_oai_response_with_usage(json_str: &str, usage: TokenUsage) -> Result<LlmResponse> {
         let parsed: serde_json::Value = serde_json::from_str(json_str)
             .map_err(|e| anyhow::anyhow!("Failed to parse OAI response JSON: {}", e))?;
 
@@ -406,7 +419,7 @@ impl LlamaLocalProvider {
 
                 if !calls.is_empty() {
                     tracing::info!("Local LLM returned {} tool calls", calls.len());
-                    return Ok(LlmResponse::ToolCalls(calls));
+                    return Ok(LlmResponse::ToolCalls(calls, Some(usage)));
                 }
             }
         }
@@ -421,6 +434,7 @@ impl LlamaLocalProvider {
         Ok(LlmResponse::Text {
             content,
             reasoning: None,
+            usage: Some(usage),
         })
     }
 }
@@ -435,7 +449,7 @@ impl LlmProvider for LlamaLocalProvider {
             template_result.prompt.len() / 4
         );
 
-        let text = self.generate(&template_result)?;
+        let (text, _usage) = self.generate(&template_result)?;
 
         tracing::debug!("Generated: {}", text);
         Ok(text)
@@ -459,7 +473,7 @@ impl LlmProvider for LlamaLocalProvider {
             template_result.grammar_lazy,
         );
 
-        let generated = self.generate(&template_result)?;
+        let (generated, usage) = self.generate(&template_result)?;
 
         tracing::debug!("Raw generated: {}", generated);
 
@@ -468,7 +482,7 @@ impl LlmProvider for LlamaLocalProvider {
             match template_result.parse_response_oaicompat(&generated, false) {
                 Ok(parsed_json) => {
                     tracing::debug!("Parsed OAI response: {}", parsed_json);
-                    return Self::parse_oai_response(&parsed_json);
+                    return Self::parse_oai_response_with_usage(&parsed_json, usage);
                 }
                 Err(e) => {
                     tracing::warn!("Failed to parse tool calls, returning as text: {}", e);
@@ -479,6 +493,7 @@ impl LlmProvider for LlamaLocalProvider {
         Ok(LlmResponse::Text {
             content: generated,
             reasoning: None,
+            usage: Some(usage),
         })
     }
 }

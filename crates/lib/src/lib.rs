@@ -13,21 +13,20 @@ mod memory;
 pub mod react;
 pub mod situation;
 pub mod skill;
-mod state_capsule;
 mod state_updater;
 pub mod tool;
 
 use parking_lot::Mutex;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
 pub use capture::CaptureRequest;
 pub use harmony::HarmonyTemplate;
-pub use llm::{create_provider, ChatMessage, ChatRole};
+pub use llm::{create_provider, ChatMessage, ChatRole, TokenUsage};
 use tool::ToolAccess;
 pub use memory::ConversationMemory;
-pub use state_capsule::StateCapsule;
-pub use state_updater::{RuleBasedStateUpdater, StateUpdater};
+pub use state_updater::{BackchannelDetector, RuleBasedBackchannelDetector};
 
 // UniFFI generated code
 uniffi::include_scaffolding!("agent");
@@ -77,6 +76,12 @@ fn parse_structured_response(json_str: &str) -> Result<(String, Vec<String>), Ag
     Ok((response, keywords))
 }
 
+/// Configuration for an external MCP server to spawn and connect to.
+pub struct McpServerConfig {
+    pub command: String,
+    pub args: Vec<String>,
+}
+
 /// Configuration for the agent
 pub struct AgentConfig {
     pub model_path: Option<String>,
@@ -86,9 +91,12 @@ pub struct AgentConfig {
     pub use_harmony_template: bool,
     pub temperature: Option<f32>,
     pub max_tokens: u32,
+    /// Model context window size in tokens (used for compaction triggering).
+    pub context_window: u32,
     pub language: Option<String>,
     pub working_dir: Option<String>,
     pub reasoning_effort: Option<String>,
+    pub mcp_servers: Vec<McpServerConfig>,
 }
 
 impl Default for AgentConfig {
@@ -101,9 +109,11 @@ impl Default for AgentConfig {
             use_harmony_template: true,
             temperature: Some(0.7),
             max_tokens: 2048,
+            context_window: 128_000,
             language: Some("en".to_string()),
             working_dir: None,
             reasoning_effort: None,
+            mcp_servers: Vec::new(),
         }
     }
 }
@@ -115,6 +125,10 @@ pub struct AgentResponse {
     pub is_final: bool,
     pub keywords: Option<Vec<String>>,
     pub reasoning: Option<String>,
+    pub input_tokens: u64,
+    pub output_tokens: u64,
+    pub total_tokens: u64,
+    pub context_percent: f32,
 }
 
 /// Error types for the agent
@@ -135,11 +149,12 @@ pub struct Agent {
     config: AgentConfig,
     client: Box<dyn llm::LlmProvider>,
     memory: Arc<Mutex<ConversationMemory>>,
-    state_updater: Box<dyn StateUpdater>,
+    backchannel_detector: Box<dyn BackchannelDetector>,
     system_prompt: Arc<Mutex<Option<String>>>,
     tool_registry: tool::ToolRegistry,
     skill_registry: Arc<skill::SkillRegistry>,
     situation: Arc<situation::SituationMessages>,
+    last_input_tokens: AtomicU64,
     capture_request_rx: crossbeam::channel::Receiver<capture::CaptureRequest>,
     capture_result_tx: crossbeam::channel::Sender<capture::CaptureResult>,
     find_result_tx: crossbeam::channel::Sender<capture::CaptureResult>,
@@ -168,9 +183,6 @@ pub fn agent_new(config: AgentConfig) -> Result<Arc<Agent>, AgentError> {
     )
     .map_err(|e| AgentError::ConfigError(e.to_string()))?;
 
-    // Create state updater
-    let state_updater: Box<dyn StateUpdater> = Box::new(RuleBasedStateUpdater::new());
-
     // Create tool registry with built-in tools
     let working_dir = config
         .working_dir
@@ -192,6 +204,21 @@ pub fn agent_new(config: AgentConfig) -> Result<Arc<Agent>, AgentError> {
         situation.clone(),
     );
 
+    // Connect to configured MCP servers and register their tools
+    for server_cfg in &config.mcp_servers {
+        let args_ref: Vec<&str> = server_cfg.args.iter().map(|s| s.as_str()).collect();
+        match mcp_client::McpClient::connect(&server_cfg.command, &args_ref) {
+            Ok(client) => {
+                for handler in client.tool_handlers() {
+                    tool_registry.register(handler);
+                }
+            }
+            Err(e) => {
+                tracing::warn!("Failed to connect MCP server '{}': {}", server_cfg.command, e);
+            }
+        }
+    }
+
     // Register capture tools (shared request channel, separate result channels)
     tool_registry.register(Box::new(capture::CaptureScreenTool::new(
         capture_bridge.request_tx.clone(),
@@ -210,11 +237,12 @@ pub fn agent_new(config: AgentConfig) -> Result<Arc<Agent>, AgentError> {
         config,
         client,
         memory: Arc::new(Mutex::new(ConversationMemory::new())),
-        state_updater,
+        backchannel_detector: Box::new(RuleBasedBackchannelDetector::new()),
         system_prompt: Arc::new(Mutex::new(None)),
         tool_registry,
         skill_registry,
         situation,
+        last_input_tokens: AtomicU64::new(0),
         capture_request_rx: capture_bridge.request_rx,
         capture_result_tx: capture_bridge.capture_result_tx,
         find_result_tx: capture_bridge.find_result_tx,
@@ -227,13 +255,8 @@ impl Agent {
     pub fn step(&self, user_input: String) -> Result<AgentResponse, AgentError> {
         let mut memory = self.memory.lock();
 
-        // Update state capsule based on user input
-        let prev_capsule = memory.get_state_capsule().clone();
-        let updated_capsule = self
-            .state_updater
-            .update(&prev_capsule, &user_input)
-            .map_err(|e| AgentError::InternalError(e.to_string()))?;
-        memory.update_state_capsule(updated_capsule);
+        // Compact if last turn approached context window limit (>= 90%)
+        self.maybe_compact(&mut memory);
 
         // Add user message to memory
         memory.add_message(ChatMessage::user(user_input.clone()));
@@ -245,13 +268,6 @@ impl Agent {
         let system_prompt = self.system_prompt.lock().clone();
         if let Some(prompt) = system_prompt {
             messages.insert(0, ChatMessage::system(prompt));
-        }
-
-        // Prepend state capsule as system message if not empty and after custom prompt
-        let state_prompt = memory.get_state_prompt();
-        if !state_prompt.is_empty() {
-            let insert_pos = if self.system_prompt.lock().is_some() { 1 } else { 0 };
-            messages.insert(insert_pos, ChatMessage::system(state_prompt));
         }
 
         // Inject skill catalog so LLM knows what skills are available
@@ -267,19 +283,19 @@ impl Agent {
         };
 
         // Use ReAct loop if provider supports tools and tools are registered
-        let (response_text, keywords, reasoning) = if self.client.supports_tools()
+        let (response_text, keywords, reasoning, usage) = if self.client.supports_tools()
             && !self.tool_registry.is_empty()
         {
             // ReAct loop with tool calling
             let mut react_messages = formatted_messages;
-            let (text, reasoning) = react::run(
+            let (text, reasoning, usage) = react::run(
                 self.client.as_ref(),
                 &mut react_messages,
                 &self.tool_registry,
                 None,
             )?;
 
-            (text, Vec::new(), reasoning)
+            (text, Vec::new(), reasoning, usage)
         } else if self.client.supports_structured_output() {
             // Structured output for keyword extraction (no tools)
             let schema = get_keyword_schema();
@@ -288,18 +304,27 @@ impl Agent {
                 .chat_with_schema(&formatted_messages, schema, "conversation_response")
                 .map_err(|e| AgentError::NetworkError(e.to_string()))?;
             let (text, keywords) = parse_structured_response(&json_response)?;
-            (text, keywords, None)
+            (text, keywords, None, TokenUsage::default())
         } else {
             // Fallback: regular chat (no keywords, no tools)
             let response = self
                 .client
                 .chat(&formatted_messages)
                 .map_err(|e| AgentError::NetworkError(e.to_string()))?;
-            (response, Vec::new(), None)
+            (response, Vec::new(), None, TokenUsage::default())
         };
+
+        // Track token usage for compaction decisions
+        self.last_input_tokens.store(usage.input_tokens, Ordering::Relaxed);
 
         // Add assistant response to memory
         memory.add_message(ChatMessage::assistant(response_text.clone()));
+
+        let context_percent = if self.config.context_window > 0 {
+            (usage.input_tokens as f64 / self.config.context_window as f64 * 100.0) as f32
+        } else {
+            0.0
+        };
 
         Ok(AgentResponse {
             content: response_text,
@@ -307,28 +332,24 @@ impl Agent {
             is_final: true,
             keywords: if keywords.is_empty() { None } else { Some(keywords) },
             reasoning,
+            input_tokens: usage.input_tokens,
+            output_tokens: usage.output_tokens,
+            total_tokens: usage.total_tokens,
+            context_percent,
         })
     }
 
     /// Process a backchannel event (audio only, no history pollution)
     pub fn process_backchannel(&self, partial_input: String, pause_ms: u64) -> Option<String> {
-        let mut memory = self.memory.lock();
-
         if let Some(backchannel_text) = self
-            .state_updater
+            .backchannel_detector
             .should_backchannel(&partial_input, pause_ms)
         {
-            let prev_capsule = memory.get_state_capsule().clone();
-            if let Ok(updated_capsule) = self.state_updater.update(&prev_capsule, &partial_input) {
-                memory.update_state_capsule(updated_capsule);
-            }
-
+            let mut memory = self.memory.lock();
             memory.add_backchannel();
-
             tracing::debug!("Backchannel triggered: '{}'", backchannel_text);
             return Some(backchannel_text);
         }
-
         None
     }
 
@@ -364,13 +385,8 @@ impl Agent {
     ) -> Result<AgentResponse, AgentError> {
         let mut memory = self.memory.lock();
 
-        // Update state capsule based on user input
-        let prev_capsule = memory.get_state_capsule().clone();
-        let updated_capsule = self
-            .state_updater
-            .update(&prev_capsule, &user_input)
-            .map_err(|e| AgentError::InternalError(e.to_string()))?;
-        memory.update_state_capsule(updated_capsule);
+        // Compact if last turn approached context window limit (>= 90%)
+        self.maybe_compact(&mut memory);
 
         // Add user message to memory
         memory.add_message(ChatMessage::user(user_input.clone()));
@@ -382,13 +398,6 @@ impl Agent {
         let system_prompt = self.system_prompt.lock().clone();
         if let Some(prompt) = system_prompt {
             messages.insert(0, ChatMessage::system(prompt));
-        }
-
-        // Prepend state capsule as system message if not empty
-        let state_prompt = memory.get_state_prompt();
-        if !state_prompt.is_empty() {
-            let insert_pos = if self.system_prompt.lock().is_some() { 1 } else { 0 };
-            messages.insert(insert_pos, ChatMessage::system(state_prompt));
         }
 
         // Inject skill catalog
@@ -405,17 +414,17 @@ impl Agent {
 
         // Use ReAct loop with filtered tools
         let filtered = self.tool_registry.filtered(&allowed_tools);
-        let (response_text, keywords, reasoning) = if self.client.supports_tools()
+        let (response_text, keywords, reasoning, usage) = if self.client.supports_tools()
             && !filtered.is_empty()
         {
             let mut react_messages = formatted_messages;
-            let (text, reasoning) = react::run(
+            let (text, reasoning, usage) = react::run(
                 self.client.as_ref(),
                 &mut react_messages,
                 &filtered,
                 None,
             )?;
-            (text, Vec::new(), reasoning)
+            (text, Vec::new(), reasoning, usage)
         } else if self.client.supports_structured_output() {
             let schema = get_keyword_schema();
             let json_response = self
@@ -423,17 +432,26 @@ impl Agent {
                 .chat_with_schema(&formatted_messages, schema, "conversation_response")
                 .map_err(|e| AgentError::NetworkError(e.to_string()))?;
             let (text, keywords) = parse_structured_response(&json_response)?;
-            (text, keywords, None)
+            (text, keywords, None, TokenUsage::default())
         } else {
             let response = self
                 .client
                 .chat(&formatted_messages)
                 .map_err(|e| AgentError::NetworkError(e.to_string()))?;
-            (response, Vec::new(), None)
+            (response, Vec::new(), None, TokenUsage::default())
         };
+
+        // Track token usage for compaction decisions
+        self.last_input_tokens.store(usage.input_tokens, Ordering::Relaxed);
 
         // Add assistant response to memory
         memory.add_message(ChatMessage::assistant(response_text.clone()));
+
+        let context_percent = if self.config.context_window > 0 {
+            (usage.input_tokens as f64 / self.config.context_window as f64 * 100.0) as f32
+        } else {
+            0.0
+        };
 
         Ok(AgentResponse {
             content: response_text,
@@ -441,6 +459,10 @@ impl Agent {
             is_final: true,
             keywords: if keywords.is_empty() { None } else { Some(keywords) },
             reasoning,
+            input_tokens: usage.input_tokens,
+            output_tokens: usage.output_tokens,
+            total_tokens: usage.total_tokens,
+            context_percent,
         })
     }
 
@@ -486,42 +508,73 @@ impl Agent {
         }
     }
 
+    /// Compact memory if the last turn's input tokens reached >= 90% of context window.
+    /// Targets 50% of context window after compaction to leave room.
+    fn maybe_compact(&self, memory: &mut ConversationMemory) {
+        let last = self.last_input_tokens.load(Ordering::Relaxed);
+        if last == 0 {
+            return;
+        }
+        let threshold = (self.config.context_window as f64 * 0.9) as u64;
+        if last >= threshold {
+            let target = self.config.context_window as usize / 2;
+            let dropped = memory.compact(target);
+            if dropped > 0 {
+                tracing::info!(
+                    "Compacted memory: dropped {} messages (last input: {} tokens, window: {})",
+                    dropped,
+                    last,
+                    self.config.context_window,
+                );
+            }
+        }
+    }
+
     /// Push a situation message from Swift (e.g. periodic window list).
     pub fn push_situation_message(&self, text: String, source: String, session_id: String) {
         self.situation.push(text, source, session_id);
     }
 }
 
+/// Extract the last path component for display.
+fn path_basename(path: &str) -> &str {
+    std::path::Path::new(path)
+        .file_name()
+        .and_then(|f| f.to_str())
+        .unwrap_or(path)
+}
+
 /// Format a WatcherEvent as a one-line situation message.
 /// Returns `(line, source, session_id)` or `None` for events that shouldn't appear.
+///
+/// Lines are prefixed with `[Claude Code <project>]` so the LLM knows the source.
 fn format_event_for_situation(
     event: &event_router::WatcherEvent,
 ) -> Option<(String, String, String)> {
     match event {
         event_router::WatcherEvent::Hook(h) => {
-            let line = if let Some(ref tool) = h.tool_name {
+            let session_id = h.session_id.clone().unwrap_or_default();
+            let project = path_basename(&session_id);
+            let detail = if let Some(ref tool) = h.tool_name {
                 if let Some(ref path) = h.file_path {
-                    let basename = std::path::Path::new(path)
-                        .file_name()
-                        .map(|f| f.to_string_lossy().to_string())
-                        .unwrap_or_else(|| path.clone());
-                    format!("[hook] {}: {}", tool, basename)
+                    format!("{}: {}", tool, path_basename(path))
                 } else {
-                    format!("[hook] {}", tool)
+                    tool.clone()
                 }
             } else {
-                format!("[hook] {}", h.event)
+                h.event.clone()
             };
-            let session_id = h.session_id.clone().unwrap_or_default();
+            let line = format!("[Claude Code {}] {}", project, detail);
             Some((line, "hook".to_string(), session_id))
         }
         event_router::WatcherEvent::Session(s) => {
             if s.tool_uses.is_empty() {
                 return None;
             }
-            let tools: Vec<&str> = s.tool_uses.iter().map(|t| t.name.as_str()).collect();
-            let line = format!("[session] {}: {}", s.event_type, tools.join(", "));
             let session_id = s.session_id.clone().unwrap_or_default();
+            let project = path_basename(&session_id);
+            let tools: Vec<&str> = s.tool_uses.iter().map(|t| t.name.as_str()).collect();
+            let line = format!("[Claude Code {}] {}: {}", project, s.event_type, tools.join(", "));
             Some((line, "session".to_string(), session_id))
         }
         event_router::WatcherEvent::UserSpeech(_) => None, // goes to main conversation

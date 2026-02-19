@@ -6,6 +6,9 @@ use crate::situation::{ReadSituationMessagesTool, SituationMessages};
 use crate::skill::{SkillLookupTool, SkillRegistry};
 use crate::AgentError;
 
+/// Maximum characters in a tool result before truncation (~2k tokens).
+const MAX_OUTPUT_CHARS: usize = 8000;
+
 /// Result of a tool call, containing text and optional images
 #[derive(Debug)]
 pub struct ToolResult {
@@ -24,6 +27,20 @@ impl ToolResult {
     pub fn with_images(text: String, images: Vec<ImageContent>) -> Self {
         Self { text, images }
     }
+
+    /// Truncate text output if it exceeds `MAX_OUTPUT_CHARS`.
+    fn truncate(&mut self) {
+        if self.text.len() > MAX_OUTPUT_CHARS {
+            let total = self.text.len();
+            // Find a safe char boundary to truncate at
+            let end = self.text.floor_char_boundary(MAX_OUTPUT_CHARS);
+            self.text.truncate(end);
+            self.text.push_str(&format!(
+                "\n\n... (truncated: showing {}/{} chars. Use offset/limit or filter to narrow results.)",
+                end, total
+            ));
+        }
+    }
 }
 
 impl From<String> for ToolResult {
@@ -39,10 +56,18 @@ pub trait ToolHandler: Send + Sync {
     fn parameters_schema(&self) -> serde_json::Value;
     fn call(&self, args: serde_json::Value) -> Result<ToolResult, AgentError>;
 
-    /// Optional dynamic description that can change at runtime (e.g. include live stats).
-    /// When `Some`, this overrides `description()` in tool definitions sent to the LLM.
-    fn dynamic_description(&self) -> Option<String> {
+    /// Optional live state snippet appended to description (e.g. "3 messages, last at 12:34").
+    /// The framework combines it as: `"{description} [{dynamic_state}]"`.
+    fn dynamic_state(&self) -> Option<String> {
         None
+    }
+}
+
+/// Build the full description for a tool: static description + optional dynamic state.
+pub fn full_description(tool: &dyn ToolHandler) -> String {
+    match tool.dynamic_state() {
+        Some(state) => format!("{} [{}]", tool.description(), state),
+        None => tool.description().to_string(),
     }
 }
 
@@ -83,9 +108,7 @@ impl ToolAccess for ToolRegistry {
             .iter()
             .map(|t| ToolDefinition {
                 name: t.name().to_string(),
-                description: t
-                    .dynamic_description()
-                    .unwrap_or_else(|| t.description().to_string()),
+                description: full_description(t.as_ref()),
                 parameters: t.parameters_schema(),
             })
             .collect()
@@ -99,7 +122,8 @@ impl ToolAccess for ToolRegistry {
             .ok_or_else(|| AgentError::InternalError(format!("Unknown tool: {}", name)))?;
 
         tracing::info!("Calling tool: {} with args: {}", name, args);
-        let result = tool.call(args)?;
+        let mut result = tool.call(args)?;
+        result.truncate();
         tracing::debug!("Tool {} returned {} chars", name, result.text.len());
         Ok(result)
     }
@@ -122,9 +146,7 @@ impl<'a> ToolAccess for FilteredToolRegistry<'a> {
             .filter(|t| self.allowed.iter().any(|a| a == t.name()))
             .map(|t| ToolDefinition {
                 name: t.name().to_string(),
-                description: t
-                    .dynamic_description()
-                    .unwrap_or_else(|| t.description().to_string()),
+                description: full_description(t.as_ref()),
                 parameters: t.parameters_schema(),
             })
             .collect()
@@ -141,7 +163,8 @@ impl<'a> ToolAccess for FilteredToolRegistry<'a> {
             .ok_or_else(|| AgentError::InternalError(format!("Unknown tool: {}", name)))?;
 
         tracing::info!("Calling tool: {} with args: {}", name, args);
-        let result = tool.call(args)?;
+        let mut result = tool.call(args)?;
+        result.truncate();
         tracing::debug!("Tool {} returned {} chars", name, result.text.len());
         Ok(result)
     }
@@ -277,7 +300,7 @@ impl ToolHandler for GlobTool {
     }
 
     fn description(&self) -> &str {
-        "Find files matching a glob pattern (e.g. \"**/*.rs\", \"src/**/*.swift\"). Returns matching file paths."
+        "Find files matching a glob pattern (e.g. \"**/*.rs\", \"src/**/*.swift\"). Returns matching file paths (max 100 by default)."
     }
 
     fn parameters_schema(&self) -> serde_json::Value {
@@ -291,6 +314,10 @@ impl ToolHandler for GlobTool {
                 "path": {
                     "type": "string",
                     "description": "Base directory to search in (default: working directory)"
+                },
+                "limit": {
+                    "type": "integer",
+                    "description": "Maximum number of files to return (default: 100)"
                 }
             },
             "required": ["pattern"]
@@ -301,6 +328,7 @@ impl ToolHandler for GlobTool {
         let pattern = args["pattern"]
             .as_str()
             .ok_or_else(|| AgentError::ParseError("Missing pattern argument".to_string()))?;
+        let limit = args["limit"].as_u64().unwrap_or(100) as usize;
 
         let base_dir = args["path"]
             .as_str()
@@ -318,6 +346,7 @@ impl ToolHandler for GlobTool {
         let full_pattern_str = full_pattern.to_string_lossy();
 
         let mut matches: Vec<String> = Vec::new();
+        let mut total = 0usize;
         let entries = glob::glob(&full_pattern_str).map_err(|e| {
             AgentError::InternalError(format!("Invalid glob pattern '{}': {}", full_pattern_str, e))
         })?;
@@ -325,12 +354,15 @@ impl ToolHandler for GlobTool {
         for entry in entries {
             match entry {
                 Ok(path) => {
-                    let display = path
-                        .strip_prefix(&self.working_dir)
-                        .unwrap_or(&path)
-                        .to_string_lossy()
-                        .to_string();
-                    matches.push(display);
+                    total += 1;
+                    if matches.len() < limit {
+                        let display = path
+                            .strip_prefix(&self.working_dir)
+                            .unwrap_or(&path)
+                            .to_string_lossy()
+                            .to_string();
+                        matches.push(display);
+                    }
                 }
                 Err(e) => {
                     tracing::warn!("Glob error for entry: {}", e);
@@ -342,10 +374,16 @@ impl ToolHandler for GlobTool {
 
         if matches.is_empty() {
             Ok(ToolResult::text(format!("No files found matching '{}'", pattern)))
-        } else {
-            let count = matches.len();
+        } else if total > matches.len() {
             let mut output = matches.join("\n");
-            output.push_str(&format!("\n\n({} files found)", count));
+            output.push_str(&format!(
+                "\n\n... (showing {}/{} files. Use limit to see more.)",
+                matches.len(), total
+            ));
+            Ok(ToolResult::text(output))
+        } else {
+            let mut output = matches.join("\n");
+            output.push_str(&format!("\n\n({} files found)", total));
             Ok(ToolResult::text(output))
         }
     }

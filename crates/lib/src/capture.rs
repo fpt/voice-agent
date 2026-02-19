@@ -70,7 +70,7 @@ impl CaptureBridge {
     }
 }
 
-/// Metadata about a cached capture (Rust side tracks this for dynamic_description).
+/// Metadata about a cached capture (Rust side tracks this for dynamic_state).
 struct CacheInfo {
     metadata: String,
 }
@@ -105,14 +105,13 @@ impl ToolHandler for CaptureScreenTool {
         "Capture a window screenshot by ID (from find_window). Returns the image for vision analysis."
     }
 
-    fn dynamic_description(&self) -> Option<String> {
+    fn dynamic_state(&self) -> Option<String> {
         let calls = self.calls_since_capture.load(Ordering::Relaxed);
         let guard = self.cache.lock().unwrap();
         if let Some(ref info) = *guard {
             if calls <= CACHE_MAX_CALLS {
                 return Some(format!(
-                    "{}. [Cached image: {}. Use apply_ocr to extract text.]",
-                    self.description(),
+                    "Cached image: {}. Use apply_ocr to extract text.",
                     info.metadata,
                 ));
             }
@@ -462,11 +461,11 @@ mod tests {
     }
 
     #[test]
-    fn test_dynamic_description_with_cache() {
+    fn test_dynamic_state_with_cache() {
         let bridge = CaptureBridge::new();
         let tool = CaptureScreenTool::new(bridge.request_tx.clone(), bridge.capture_result_rx.clone());
 
-        assert!(tool.dynamic_description().is_none());
+        assert!(tool.dynamic_state().is_none());
 
         mock_swift_side(
             bridge.request_rx.clone(),
@@ -476,9 +475,14 @@ mod tests {
         );
         tool.call(serde_json::json!({"window_id": 42})).unwrap();
 
-        let desc = tool.dynamic_description().unwrap();
-        assert!(desc.contains("Cached image"));
-        assert!(desc.contains("Chrome"));
+        let state = tool.dynamic_state().unwrap();
+        assert!(state.contains("Cached image"));
+        assert!(state.contains("Chrome"));
+
+        // full_description combines static + dynamic
+        let full = crate::tool::full_description(&tool);
+        assert!(full.starts_with("Capture a window screenshot"));
+        assert!(full.contains("[Cached image"));
     }
 
     // ---- FindWindowTool tests ----

@@ -39,7 +39,7 @@ build:
 	@echo "Build complete!"
 
 run:
-	@echo "Running Voice Agent in Auto-Listen Voice Mode..."
+	@echo "Running Voice Agent in Default Mode..."
 	@cd swift && swift run voice-agent --config ../configs/default.yaml
 
 run-verbose:
