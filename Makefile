@@ -8,7 +8,7 @@ help:
 	@echo "voice-agent - Makefile"
 	@echo ""
 	@echo "voice-agent is a voice frontend and app-server client. It spawns a backend agent"
-	@echo "(the standalone 'gallium' binary by default; 'codex' via VOICE_AGENT_BACKEND)"
+	@echo "(selected by the config's backend: key; VOICE_AGENT_BACKEND overrides it)"
 	@echo "and drives it over JSON-RPC."
 	@echo ""
 	@echo "Available targets:"
@@ -17,7 +17,7 @@ help:
 	@echo "  make uninstall       - Remove the installed 'voice-agent'"
 	@echo "  make run             - Run in voice mode against the local gallium backend"
 	@echo "  make run-text        - Run in text mode against the local gallium backend"
-	@echo "  make run-codex       - Run against a cloud backend (VOICE_AGENT_BACKEND=codex, needs OPENAI_API_KEY)"
+	@echo "  make run-codex       - Run against the cloud backend (configs/codex.yaml, needs OPENAI_API_KEY)"
 	@echo "  make run-verbose     - Run in voice mode (verbose)"
 	@echo "  make build-win       - Build Windows voice-agent.exe (C# frontend) + voice_agent_core.dll"
 	@echo "  make run-win         - Build & run the Windows frontend (WIN_CONFIG=configs/foo.yaml)"
@@ -81,9 +81,9 @@ run-codex:
 		echo "  export OPENAI_API_KEY=sk-...   # or run inline: OPENAI_API_KEY=sk-... make run-codex"; \
 		exit 1; \
 	fi
-	@echo "Running voice-agent against the cloud backend (VOICE_AGENT_BACKEND=codex)..."
+	@echo "Running voice-agent against the cloud backend (configs/codex.yaml)..."
 	@echo "Using API key: $${OPENAI_API_KEY:0:8}..."
-	@cd swift && VOICE_AGENT_BACKEND=codex swift run voice-agent-cli --config ../configs/codex.yaml
+	@cd swift && swift run voice-agent-cli --config ../configs/codex.yaml
 
 # Windows. Two artifacts:
 #

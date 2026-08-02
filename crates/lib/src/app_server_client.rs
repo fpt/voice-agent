@@ -183,11 +183,24 @@ impl Shared {
 /// current shape, used by `turn/start` responses and `turn/completed`) or a flat
 /// `turnId` (`item/completed`, gallium's `turn/failed`, and older backends).
 fn turn_id_of(value: &Value) -> Option<&str> {
+    nested_or_flat_id(value, "turn", "turnId")
+}
+
+/// The same two-shapes problem for threads: codex answers `thread/start` with
+/// `{thread:{id,…}}` (`ThreadStartResponse`), gallium with a flat `{threadId}`.
+fn thread_id_of(value: &Value) -> Option<&str> {
+    nested_or_flat_id(value, "thread", "threadId")
+}
+
+/// `{ <object>: { id } }`, else `{ <flat_key> }`. The two backends disagree on
+/// which shape they use, and the disagreement is per-message rather than
+/// per-backend, so every id read goes through this.
+fn nested_or_flat_id<'a>(value: &'a Value, object: &str, flat_key: &str) -> Option<&'a str> {
     value
-        .get("turn")
-        .and_then(|t| t.get("id"))
+        .get(object)
+        .and_then(|o| o.get("id"))
         .and_then(Value::as_str)
-        .or_else(|| value.get("turnId").and_then(Value::as_str))
+        .or_else(|| value.get(flat_key).and_then(Value::as_str))
 }
 
 /// Services the backend's inbound traffic: tool calls, approval requests, and the
@@ -381,12 +394,25 @@ impl AppServerClient {
     }
 
     /// Negotiate capabilities. Returns the backend's `userAgent`.
+    ///
+    /// `clientInfo.version` and `capabilities.requestAttestation` are **required**
+    /// by codex (`ClientInfo`/`InitializeCapabilities` in its app-server protocol)
+    /// — omitting them fails the handshake outright with "missing field
+    /// `version`", so the codex backend could never connect. gallium ignores the
+    /// extra fields, so one shape serves both.
     pub fn initialize(&self, client_name: &str) -> Result<String, AgentError> {
         let resp = self.conn.request(
             "initialize",
             json!({
-                "clientInfo": { "name": client_name },
-                "capabilities": { "experimentalApi": true },
+                "clientInfo": {
+                    "name": client_name,
+                    "title": Value::Null,
+                    "version": env!("CARGO_PKG_VERSION"),
+                },
+                "capabilities": {
+                    "experimentalApi": true,
+                    "requestAttestation": false,
+                },
             }),
         )?;
         Ok(resp
@@ -443,10 +469,11 @@ impl AppServerClient {
         }
 
         let resp = self.conn.request("thread/start", params)?;
-        resp.get("threadId")
-            .and_then(Value::as_str)
-            .map(str::to_string)
-            .ok_or_else(|| AgentError::InternalError("thread/start returned no threadId".into()))
+        thread_id_of(&resp).map(str::to_string).ok_or_else(|| {
+            AgentError::InternalError(format!(
+                "thread/start named no thread (expected `thread.id` or `threadId`): {resp}"
+            ))
+        })
     }
 
     /// Open a thread and adopt it as the client's main conversation thread (the
