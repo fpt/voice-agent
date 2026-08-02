@@ -86,8 +86,10 @@ pub struct AgentResponse {
     pub output_tokens: u64,
     pub total_tokens: u64,
     pub context_percent: f32,
-    /// Self-paced cadence hint from `observe()` (seconds until next check), set
-    /// when the agent calls the `suggest_next_check` tool. `None` for `step()`.
+    /// Self-paced cadence hint (seconds until the next check), set when the model
+    /// calls the `suggest_next_check` client tool during a turn. `None` when it
+    /// did not — which is every ordinary turn, since only the ambient `/loop`
+    /// prompt asks for a cadence.
     pub suggested_next_check_seconds: Option<u32>,
 }
 
@@ -166,31 +168,42 @@ fn resolve_backend(
 fn backend_envs(config: &AgentConfig) -> Vec<(String, String)> {
     let mut envs = Vec::new();
     let mut set = |k: &str, v: String| envs.push((k.to_string(), v));
-    if let Some(p) = &config.model_path {
-        set("MODEL_PATH", p.clone());
+
+    // Absent and blank both mean "not configured". Forwarding `LLM_BASE_URL=""`
+    // or `OPENAI_API_KEY=""` would otherwise look to the backend like a
+    // deliberately empty endpoint or credential — and an empty key can shadow
+    // the backend's own credential fallback, which is exactly what a codex user
+    // signed in via `codex login` relies on. Both backends happen to defend
+    // against blanks, but this is what the "only present values" contract above
+    // actually requires.
+    let present = |v: &Option<String>| {
+        v.as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_string)
+    };
+
+    if let Some(p) = present(&config.model_path) {
+        set("MODEL_PATH", p);
     }
-    if let Some(k) = &config.api_key {
-        set("OPENAI_API_KEY", k.clone());
+    if let Some(k) = present(&config.api_key) {
+        set("OPENAI_API_KEY", k);
     }
-    // Absent and empty both mean "not configured": forwarding `LLM_BASE_URL=""`
-    // would otherwise look to the backend like a deliberately empty endpoint.
-    // Both backends happen to defend against that, but this is what the
-    // "only present values" contract above actually requires.
-    if let Some(u) = config.base_url.as_deref().filter(|s| !s.trim().is_empty()) {
-        set("LLM_BASE_URL", u.to_string());
+    if let Some(u) = present(&config.base_url) {
+        set("LLM_BASE_URL", u);
     }
-    if let Some(m) = config.model.as_deref().filter(|s| !s.trim().is_empty()) {
-        set("LLM_MODEL", m.to_string());
+    if let Some(m) = present(&config.model) {
+        set("LLM_MODEL", m);
     }
     set("MAX_TOKENS", config.max_tokens.to_string());
     if let Some(t) = config.temperature {
         set("LLM_TEMPERATURE", t.to_string());
     }
-    if let Some(r) = &config.reasoning_effort {
-        set("REASONING_EFFORT", r.clone());
+    if let Some(r) = present(&config.reasoning_effort) {
+        set("REASONING_EFFORT", r);
     }
-    if let Some(e) = &config.inference_engine {
-        set("INFERENCE_ENGINE", e.clone());
+    if let Some(e) = present(&config.inference_engine) {
+        set("INFERENCE_ENGINE", e);
     }
     envs
 }
@@ -680,22 +693,41 @@ mod tests {
         assert_eq!(source, "default");
     }
 
-    /// Absent or empty `llm:` values must not be forwarded. A codex user signed
-    /// in with `codex login` sets no baseURL/apiKey at all, and an empty
-    /// `LLM_BASE_URL` would read to a backend as a deliberately blank endpoint
-    /// rather than "not configured".
+    /// Absent *and* blank `llm:` values must not be forwarded. A codex user
+    /// signed in with `codex login` sets no baseURL/apiKey at all, and an empty
+    /// `LLM_BASE_URL` or `OPENAI_API_KEY` would read to a backend as a
+    /// deliberately blank endpoint or credential rather than "not configured" —
+    /// an empty key can shadow the backend's own credential fallback.
     #[test]
     fn absent_and_empty_llm_values_are_not_forwarded() {
+        // A blank string is the interesting case, not just `None`: an empty
+        // `OPENAI_API_KEY` can shadow the backend's own credential fallback.
         let config = AgentConfig {
-            base_url: None,
+            base_url: Some(String::new()),
             model: Some("   ".to_string()),
-            api_key: None,
+            api_key: Some("".to_string()),
+            model_path: Some("  ".to_string()),
+            reasoning_effort: Some(String::new()),
+            inference_engine: Some("\t".to_string()),
             ..Default::default()
         };
         let envs = backend_envs(&config);
         let keys: Vec<&str> = envs.iter().map(|(k, _)| k.as_str()).collect();
+        for key in [
+            "LLM_BASE_URL",
+            "LLM_MODEL",
+            "OPENAI_API_KEY",
+            "MODEL_PATH",
+            "REASONING_EFFORT",
+            "INFERENCE_ENGINE",
+        ] {
+            assert!(!keys.contains(&key), "{key} was forwarded blank: {keys:?}");
+        }
+
+        // Absent behaves the same way.
+        let envs = backend_envs(&AgentConfig::default());
+        let keys: Vec<&str> = envs.iter().map(|(k, _)| k.as_str()).collect();
         assert!(!keys.contains(&"LLM_BASE_URL"), "got {keys:?}");
-        assert!(!keys.contains(&"LLM_MODEL"), "got {keys:?}");
         assert!(!keys.contains(&"OPENAI_API_KEY"), "got {keys:?}");
     }
 
