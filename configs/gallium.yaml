@@ -1,18 +1,23 @@
 # Gallium / local backend (default)
 #
-# voice-agent is an app-server client: it spawns a backend agent and drives it a turn at a
-# time. This is the default backend — `gallium`, the standalone pure-Rust agent
+# voice-agent is an app-server client: it spawns a backend agent and drives it a
+# turn at a time. This config selects `gallium`, the standalone pure-Rust agent
 # (from ../rs-gallium) with the native candle + llama.cpp local engines. It must
-# be on PATH (override the program with `VOICE_AGENT_BACKEND`). The `llm:` fields
-# below are forwarded to it as environment; the backend runs the ReAct loop,
-# tools, and MCP.
+# be on PATH. The `llm:` fields below are forwarded to it as environment; the
+# backend runs the ReAct loop, tools, and MCP.
 #
 #   voice-agent --config configs/gallium.yaml        # gallium on PATH runs the model
 
+# The backend program on PATH. `VOICE_AGENT_BACKEND` overrides this at runtime;
+# omitting both falls back to `gallium`.
+backend: "gallium"
+
 llm:
-  modelPath: "hf:unsloth/Qwen3.5-9B-GGUF/Qwen3.5-9B-Q4_K_M.gguf"  # forwarded as MODEL_PATH
+  # Gemma 4 E4B. Auto-downloaded into the HuggingFace cache by the backend's
+  # model downloader on first run.
+  modelPath: "hf:unsloth/gemma-4-E4B-it-GGUF/gemma-4-E4B-it-Q4_K_M.gguf"  # forwarded as MODEL_PATH
   baseURL: ""
-  model: "qwen3.5:9b"                 # forwarded as LLM_MODEL
+  model: "gemma-4-e4b"                # forwarded as LLM_MODEL
   harmonyTemplate: false
   temperature: 0.7
   maxTokens: 4096
@@ -20,12 +25,19 @@ llm:
   # The backend's local inference engine: "llamacpp" (in-process llama.cpp) or
   # "gallium" (native pure-Rust candle). Forwarded to the backend as
   # INFERENCE_ENGINE. gallium auto-detects the architecture (gpt-oss / qwen35 /
-  # gemma4) from the GGUF metadata (or config.json for safetensors). Optional env
-  # knobs (read by the backend):
-  #   KESSEL_GALLIUM_TOKENIZER_REPO  tokenizer.json repo (if not beside the GGUF)
-  #   KESSEL_GALLIUM_DTYPE           f16 | bf16 | f32  (safetensors only, default f16)
-  #   KESSEL_GALLIUM_THINKING        1 to enable Gemma 4's thinking channel
-  inferenceEngine: "gallium"
+  # gemma4) from the GGUF metadata (or config.json for safetensors).
+  #
+  # llamacpp rather than candle for E4B on purpose: candle's dense E4B path has a
+  # known degenerate-output bug (docs/REFACTOR.md), and llama.cpp reads the
+  # tokenizer from inside the GGUF, so no separate tokenizer repo is needed.
+  #
+  # Optional env knobs, read by the *backend* (gallium's own names — not
+  # VOICE_AGENT_*, and not settable from this file):
+  #   GALLIUM_TOKENIZER_REPO  tokenizer.json repo (candle only; E4B's is
+  #                           hf:unsloth/gemma-4-E4B-it)
+  #   GALLIUM_DTYPE           f16 | bf16 | f32  (safetensors only, default f16)
+  #   GALLIUM_THINKING        1 to enable Gemma 4's thinking channel
+  inferenceEngine: "llamacpp"
 
 agent:
   systemPromptPath: null

@@ -48,6 +48,9 @@ dictionary AgentConfig {
     string? working_dir;
     string? reasoning_effort;
     string? inference_engine;
+    // Backend agent program to spawn ("gallium", "codex", or "prog arg1 arg2").
+    // The `VOICE_AGENT_BACKEND` env var overrides it; default is "gallium".
+    string? backend;
     sequence<McpServerConfig> mcp_servers;
 };
 

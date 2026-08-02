@@ -3,6 +3,13 @@ import Yams
 
 /// Configuration structure matching configs/gallium.yaml
 public struct Config: Codable {
+    /// Backend agent program to spawn: "gallium" (default), "codex", or a full
+    /// "prog arg1 arg2". The `VOICE_AGENT_BACKEND` env var overrides it.
+    ///
+    /// This lives at the top level rather than under `llm:` because it selects
+    /// the *process*, not the model — everything under `llm:` is forwarded to
+    /// whichever backend this names.
+    public let backend: String?
     public let llm: LLMConfig
     public let agent: AgentConfig
     public let tts: TTSConfig?
@@ -142,6 +149,7 @@ public struct Config: Codable {
     /// Default configuration for development
     public static func `default`() -> Config {
         Config(
+            backend: nil,
             llm: LLMConfig(
                 baseURL: "http://127.0.0.1:8080/v1",
                 model: "gpt-oss-20b",

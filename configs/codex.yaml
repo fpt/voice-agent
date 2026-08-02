@@ -1,15 +1,17 @@
 # Codex / cloud backend
 #
-# voice-agent is an app-server client: it spawns a backend agent and drives it a turn at a
-# time. This config points the frontend at a cloud backend. Select it with:
+# voice-agent is an app-server client: it spawns a backend agent and drives it a
+# turn at a time. This config selects OpenAI's `codex` app-server:
 #
-#   VOICE_AGENT_BACKEND=codex   OPENAI_API_KEY=sk-...   voice-agent --config configs/codex.yaml
+#   OPENAI_API_KEY=sk-...   voice-agent --config configs/codex.yaml
 #
-# `VOICE_AGENT_BACKEND` names the backend program on PATH (default: `gallium`).
-# Use `codex` for OpenAI's codex app-server, or any binary speaking the same
-# codex-app-server JSON-RPC subset. The `llm:` fields below are forwarded to the
-# backend as environment (baseURL/model/apiKey/…); the backend runs the ReAct
-# loop, tools, and MCP.
+# The `llm:` fields below are forwarded to that backend as environment
+# (baseURL/model/apiKey/…); the backend runs the ReAct loop, tools, and MCP.
+
+# The backend program on PATH. `VOICE_AGENT_BACKEND` overrides this at runtime;
+# omitting both falls back to `gallium`. Any binary speaking the same
+# codex-app-server JSON-RPC subset works here.
+backend: "codex"
 
 llm:
   baseURL: "https://api.openai.com/v1"  # forwarded as LLM_BASE_URL

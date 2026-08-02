@@ -51,6 +51,10 @@ pub struct AgentConfig {
     /// Local inference backend: "llamacpp" (default) or "gallium". Forwarded to
     /// the backend agent process via `INFERENCE_ENGINE`.
     pub inference_engine: Option<String>,
+    /// Backend agent program to spawn: `"gallium"`, `"codex"`, or a full
+    /// `"prog arg1 arg2"`. Overridden by the `VOICE_AGENT_BACKEND` env var;
+    /// `None` falls back to `gallium`.
+    pub backend: Option<String>,
     pub mcp_servers: Vec<McpServerConfig>,
 }
 
@@ -69,6 +73,7 @@ impl Default for AgentConfig {
             working_dir: None,
             reasoning_effort: None,
             inference_engine: None,
+            backend: None,
             mcp_servers: Vec::new(),
         }
     }
@@ -121,16 +126,42 @@ pub enum AgentError {
 // Backend process wiring
 // ============================================================================
 
-/// The backend agent command to spawn. `VOICE_AGENT_BACKEND` overrides it (may be
-/// `"prog arg1 arg2"`); default is `gallium` on `PATH` (the rs-gallium
-/// app-server binary). The `app-server` argument is appended by
+/// The backend agent command to spawn, in precedence order: the
+/// `VOICE_AGENT_BACKEND` env var (the runtime override), then the config's
+/// `backend`, then `gallium` on `PATH`. Any of them may carry arguments
+/// (`"prog arg1 arg2"`). The `app-server` argument is appended by
 /// [`app_server_client::AppServerClient::spawn`].
-fn backend_command() -> (String, Vec<String>) {
-    let spec = std::env::var("VOICE_AGENT_BACKEND").unwrap_or_else(|_| "gallium".to_string());
+///
+/// The config has to be able to select this. Without it, a file named
+/// `codex.yaml` still spawned `gallium` — which ignored the forwarded cloud
+/// settings and ran its own local model, so the config looked silently ignored.
+fn backend_command(config: &AgentConfig) -> (String, Vec<String>, &'static str) {
+    resolve_backend(
+        std::env::var("VOICE_AGENT_BACKEND").ok().as_deref(),
+        config.backend.as_deref(),
+    )
+}
+
+/// The pure half of [`backend_command`], so the precedence can be tested without
+/// mutating process-global environment from parallel tests.
+fn resolve_backend(
+    env_override: Option<&str>,
+    config_backend: Option<&str>,
+) -> (String, Vec<String>, &'static str) {
+    let non_empty = |s: &str| (!s.trim().is_empty()).then(|| s.to_string());
+    let (spec, source) = env_override
+        .and_then(non_empty)
+        .map(|s| (s, "VOICE_AGENT_BACKEND"))
+        .or_else(|| {
+            config_backend
+                .and_then(non_empty)
+                .map(|s| (s, "config `backend`"))
+        })
+        .unwrap_or_else(|| ("gallium".to_string(), "default"));
     let mut parts = spec.split_whitespace();
     let program = parts.next().unwrap_or("gallium").to_string();
     let args: Vec<String> = parts.map(String::from).collect();
-    (program, args)
+    (program, args, source)
 }
 
 /// Translate `AgentConfig` into the environment the backend's `app-server` reads
@@ -339,14 +370,21 @@ pub fn agent_new(
     };
 
     // Spawn and connect the backend.
-    let (program, args) = backend_command();
+    let (program, args, backend_source) = backend_command(&config);
     let envs = backend_envs(&config);
     let client =
         app_server_client::AppServerClient::spawn(&program, &args, &envs, tools, approver)?;
     let user_agent = client
         .initialize("voice-agent")
         .map_err(|e| AgentError::ConfigError(format!("backend handshake failed: {e}")))?;
-    tracing::info!("connected to backend '{}' ({})", program, user_agent);
+    // Name where the choice came from: picking the wrong backend is otherwise
+    // invisible until the model answers, and looks like the config was ignored.
+    tracing::info!(
+        "connected to backend '{}' from {} ({})",
+        program,
+        backend_source,
+        user_agent
+    );
 
     Ok(Arc::new(Agent {
         config,
@@ -639,5 +677,58 @@ impl Agent {
 
         tracing::info!("Goal evaluation: met={} reason={}", met, reason);
         Ok(GoalEvaluation { met, reason })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A config naming a backend selects it. Without this, `--config
+    /// configs/codex.yaml` spawned `gallium` — which ignored the forwarded cloud
+    /// settings and ran its own local model, so the config looked ignored.
+    #[test]
+    fn config_backend_selects_the_program() {
+        let (program, args, source) = resolve_backend(None, Some("codex"));
+        assert_eq!(program, "codex");
+        assert!(args.is_empty());
+        assert_eq!(source, "config `backend`");
+    }
+
+    /// The env var is the runtime override, so it beats the config.
+    #[test]
+    fn env_override_beats_the_config() {
+        let (program, _, source) = resolve_backend(Some("codex"), Some("gallium"));
+        assert_eq!(program, "codex");
+        assert_eq!(source, "VOICE_AGENT_BACKEND");
+    }
+
+    /// Neither set: `gallium` on PATH, as before.
+    #[test]
+    fn falls_back_to_gallium() {
+        let (program, _, source) = resolve_backend(None, None);
+        assert_eq!(program, "gallium");
+        assert_eq!(source, "default");
+    }
+
+    /// Blank is not a selection — an unset-but-exported env var or an empty YAML
+    /// value must fall through rather than try to spawn "".
+    #[test]
+    fn blank_values_fall_through() {
+        let (program, _, source) = resolve_backend(Some("   "), Some("codex"));
+        assert_eq!(program, "codex");
+        assert_eq!(source, "config `backend`");
+
+        let (program, _, source) = resolve_backend(Some(""), Some(""));
+        assert_eq!(program, "gallium");
+        assert_eq!(source, "default");
+    }
+
+    /// Either source may carry arguments.
+    #[test]
+    fn a_backend_spec_may_carry_arguments() {
+        let (program, args, _) = resolve_backend(None, Some("my-agent --flag x"));
+        assert_eq!(program, "my-agent");
+        assert_eq!(args, vec!["--flag", "x"]);
     }
 }

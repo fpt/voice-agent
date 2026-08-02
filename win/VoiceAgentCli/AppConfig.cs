@@ -6,6 +6,12 @@ namespace VoiceAgentCli;
 /// Windows CLI needs are mapped; unknown keys are ignored.
 public sealed class AppConfig
 {
+    /// Backend agent program to spawn: "gallium" (default), "codex", or a full
+    /// "prog arg1 arg2". The VOICE_AGENT_BACKEND env var overrides it. Top level
+    /// rather than under `llm:` because it selects the *process*, not the model.
+    [YamlMember(Alias = "backend")]
+    public string? Backend { get; set; }
+
     [YamlMember(Alias = "llm")]
     public LlmSection Llm { get; set; } = new();
 

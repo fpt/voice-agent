@@ -80,15 +80,17 @@ prompt supports the `{language}` template variable.
 | config | backend | notes |
 |--------|---------|-------|
 | `gallium.yaml` | `gallium` (default) | local model via the standalone pure-Rust agent; `modelPath` + `inferenceEngine` forwarded as env |
-| `codex.yaml` | `codex` (cloud) | set `VOICE_AGENT_BACKEND=codex` + `OPENAI_API_KEY`; `baseURL`/`model` forwarded |
+| `codex.yaml` | `codex` (cloud) | declares `backend: "codex"`; needs `OPENAI_API_KEY`; `baseURL`/`model` forwarded |
 
 ```yaml
+backend: "gallium"                      # backend program on PATH; VOICE_AGENT_BACKEND overrides
+
 llm:
-  modelPath: "hf:unsloth/Qwen3.5-9B-GGUF/Qwen3.5-9B-Q4_K_M.gguf"  # forwarded as MODEL_PATH (auto-downloaded by the backend)
+  modelPath: "hf:unsloth/gemma-4-E4B-it-GGUF/gemma-4-E4B-it-Q4_K_M.gguf"  # forwarded as MODEL_PATH (auto-downloaded by the backend)
   baseURL: "https://api.openai.com/v1"  # forwarded as LLM_BASE_URL (cloud)
   model: "gpt-5.6-luna"                 # forwarded as LLM_MODEL
   apiKey: ""                            # or OPENAI_API_KEY env var
-  inferenceEngine: "gallium"            # forwarded as INFERENCE_ENGINE (backend's local engine: llamacpp | gallium)
+  inferenceEngine: "llamacpp"           # forwarded as INFERENCE_ENGINE (backend's local engine: llamacpp | gallium)
   temperature: 0.7
   maxTokens: 2048
   reasoningEffort: "medium"
@@ -103,8 +105,15 @@ stt:  { enabled: true, locale: "en-US", censor: false }
 ```
 
 The `llm:` block is **forwarded to the backend as environment** — voice-agent does not
-interpret it beyond that. Backend selection is via `VOICE_AGENT_BACKEND` (env), not
-the config.
+interpret it beyond that. Backend selection is the config's top-level `backend:`
+key, resolved by `resolve_backend()` in precedence order: `VOICE_AGENT_BACKEND`
+env → config `backend:` → `gallium`. The startup log names which source won.
+
+> The config **must** be able to select the backend. When it couldn't,
+> `--config configs/codex.yaml` still spawned `gallium`, which ignored the
+> forwarded cloud settings and ran its own local model from
+> `~/.config/gallium/config.toml` — indistinguishable from the config being
+> ignored.
 
 ## Skills
 

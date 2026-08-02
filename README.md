@@ -16,7 +16,8 @@ The frontend is native per platform; the agent backend is a separate binary
 | **Windows** | C# / .NET 8 — `voice-agent.exe` | `System.Speech` recognizer + synthesizer |
 
 The backend is swappable: `gallium` and `codex` both speak the same
-codex-app-server JSON-RPC subset. Select it with `VOICE_AGENT_BACKEND` (default
+codex-app-server JSON-RPC subset. Each config selects one with its top-level
+`backend:` key; `VOICE_AGENT_BACKEND` overrides it at runtime (default
 `gallium`).
 
 ## Features
@@ -51,9 +52,9 @@ make install
 # Run against the local gallium backend (auto-downloads the model on first run)
 voice-agent --config configs/gallium.yaml
 
-# ...or a cloud backend
+# ...or a cloud backend (codex.yaml declares `backend: "codex"`)
 export OPENAI_API_KEY=sk-...
-VOICE_AGENT_BACKEND=codex voice-agent --config configs/codex.yaml
+voice-agent --config configs/codex.yaml
 ```
 
 `make install` installs a single binary, **`voice-agent`** (the voice app). The agent
@@ -83,14 +84,16 @@ are shipped, one per backend flavor:
 | config | backend | notes |
 |--------|---------|-------|
 | `gallium.yaml` | `gallium` (default) | local model via the standalone pure-Rust agent |
-| `codex.yaml` | `codex` (cloud) | set `VOICE_AGENT_BACKEND=codex` + `OPENAI_API_KEY` |
+| `codex.yaml` | `codex` (cloud) | declares `backend: "codex"`; needs `OPENAI_API_KEY` |
 
 ```yaml
+backend: "gallium"                    # backend program on PATH: gallium | codex | "prog args"
+
 llm:                                  # forwarded to the backend as environment
-  modelPath: "hf:unsloth/Qwen3.5-9B-GGUF/Qwen3.5-9B-Q4_K_M.gguf"  # local (MODEL_PATH)
+  modelPath: "hf:unsloth/gemma-4-E4B-it-GGUF/gemma-4-E4B-it-Q4_K_M.gguf"  # local (MODEL_PATH)
   baseURL: "https://api.openai.com/v1"                            # cloud (LLM_BASE_URL)
   model: "gpt-5.6-luna"
-  inferenceEngine: "gallium"          # backend's local engine: llamacpp | gallium
+  inferenceEngine: "llamacpp"         # backend's local engine: llamacpp | gallium
   temperature: 0.7
   maxTokens: 2048
 
@@ -109,7 +112,8 @@ stt: { enabled: true, locale: "en-US" }
 ```
 
 The `llm:` block is **forwarded to the backend** — voice-agent does not interpret it.
-Backend selection is via `VOICE_AGENT_BACKEND` (env), not the config.
+Backend selection is the config's top-level `backend:` key; `VOICE_AGENT_BACKEND`
+overrides it at runtime.
 
 ## MCP
 
