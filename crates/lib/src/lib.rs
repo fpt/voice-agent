@@ -513,24 +513,6 @@ impl Agent {
         self.skill_registry.add(name, description, prompt);
     }
 
-    /// Run a one-shot, **non-persisting** turn for ambient/background observation
-    /// (the `/loop` ambient mode) on a throwaway backend thread, so periodic
-    /// checks don't pollute the conversation. `allowed_tools` is advisory only —
-    /// the backend owns its tool set — but the pacing hint still flows back.
-    pub fn observe(&self, prompt: String) -> Result<AgentResponse, AgentError> {
-        self.next_check.store(0, Ordering::SeqCst);
-        let instr = self.developer_instructions();
-        let thread = self.client.open_thread(
-            self.config.working_dir.as_deref(),
-            None,
-            instr.as_deref(),
-            Some("never"),
-            self.mcp_config(),
-        )?;
-        let reply = self.client.run_turn_on(&thread, &prompt)?;
-        Ok(self.make_response(reply, self.suggested_next_check()))
-    }
-
     /// Drain all pending capture requests (Swift polls this).
     pub fn drain_capture_requests(&self) -> Vec<capture::CaptureRequest> {
         let mut requests = Vec::new();

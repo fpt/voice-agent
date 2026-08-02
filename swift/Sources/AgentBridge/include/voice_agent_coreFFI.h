@@ -306,11 +306,6 @@ RustBuffer uniffi_voice_agent_core_fn_method_agent_get_conversation_history(void
 RustBuffer uniffi_voice_agent_core_fn_method_agent_goal_status(void*_Nonnull ptr, RustCallStatus *_Nonnull out_status
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_VOICE_AGENT_CORE_FN_METHOD_AGENT_OBSERVE
-#define UNIFFI_FFIDEF_UNIFFI_VOICE_AGENT_CORE_FN_METHOD_AGENT_OBSERVE
-RustBuffer uniffi_voice_agent_core_fn_method_agent_observe(void*_Nonnull ptr, RustBuffer prompt, RustCallStatus *_Nonnull out_status
-);
-#endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_VOICE_AGENT_CORE_FN_METHOD_AGENT_PUSH_SITUATION_MESSAGE
 #define UNIFFI_FFIDEF_UNIFFI_VOICE_AGENT_CORE_FN_METHOD_AGENT_PUSH_SITUATION_MESSAGE
 void uniffi_voice_agent_core_fn_method_agent_push_situation_message(void*_Nonnull ptr, RustBuffer text, RustBuffer source, RustBuffer session_id, RustCallStatus *_Nonnull out_status
@@ -685,12 +680,6 @@ uint16_t uniffi_voice_agent_core_checksum_method_agent_get_conversation_history(
 #ifndef UNIFFI_FFIDEF_UNIFFI_VOICE_AGENT_CORE_CHECKSUM_METHOD_AGENT_GOAL_STATUS
 #define UNIFFI_FFIDEF_UNIFFI_VOICE_AGENT_CORE_CHECKSUM_METHOD_AGENT_GOAL_STATUS
 uint16_t uniffi_voice_agent_core_checksum_method_agent_goal_status(void
-    
-);
-#endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_VOICE_AGENT_CORE_CHECKSUM_METHOD_AGENT_OBSERVE
-#define UNIFFI_FFIDEF_UNIFFI_VOICE_AGENT_CORE_CHECKSUM_METHOD_AGENT_OBSERVE
-uint16_t uniffi_voice_agent_core_checksum_method_agent_observe(void
     
 );
 #endif

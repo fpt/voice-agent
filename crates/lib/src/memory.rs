@@ -76,31 +76,6 @@ impl ConversationMemory {
         self.messages[start..].to_vec()
     }
 
-    /// Estimate total token count (~4 chars/token + per-message overhead).
-    pub fn estimate_tokens(&self) -> usize {
-        self.messages.iter().map(|m| m.content.len() / 4 + 10).sum()
-    }
-
-    /// Drop oldest non-system messages until estimated tokens < `target_tokens`.
-    /// Returns the number of messages dropped.
-    pub fn compact(&mut self, target_tokens: usize) -> usize {
-        let mut dropped = 0;
-        while self.estimate_tokens() > target_tokens {
-            let pos = self
-                .messages
-                .iter()
-                .position(|m| m.role != ChatRole::System);
-            match pos {
-                Some(i) => {
-                    self.messages.remove(i);
-                    dropped += 1;
-                }
-                None => break, // Only system messages left
-            }
-        }
-        dropped
-    }
-
     /// Clear all messages
     pub fn clear(&mut self) {
         self.messages.clear();
@@ -140,48 +115,6 @@ mod tests {
         memory.add_message(ChatMessage::user("Hello".to_string()));
         memory.clear();
         assert_eq!(memory.len(), 0);
-    }
-
-    #[test]
-    fn test_compact_drops_oldest_non_system() {
-        let mut memory = ConversationMemory::new();
-        memory.add_message(ChatMessage::system("System prompt".to_string()));
-        // Each 400-char message ≈ 110 estimated tokens (400/4 + 10)
-        for i in 0..10 {
-            let msg = format!("Message {} {}", i, "x".repeat(380));
-            memory.add_message(ChatMessage::user(msg));
-        }
-
-        let before = memory.len();
-        assert_eq!(before, 11); // 1 system + 10 user
-
-        // Compact to ~500 tokens — should keep system + a few user messages
-        let dropped = memory.compact(500);
-        assert!(dropped > 0);
-
-        let messages = memory.get_messages();
-        // System message must survive
-        assert_eq!(messages[0].role, ChatRole::System);
-        // Remaining messages should be the newest ones
-        let last = &messages[messages.len() - 1];
-        assert!(last.content.starts_with("Message 9"));
-    }
-
-    #[test]
-    fn test_compact_preserves_all_when_under_target() {
-        let mut memory = ConversationMemory::new();
-        memory.add_message(ChatMessage::user("short".to_string()));
-        let dropped = memory.compact(10000);
-        assert_eq!(dropped, 0);
-        assert_eq!(memory.len(), 1);
-    }
-
-    #[test]
-    fn test_estimate_tokens() {
-        let mut memory = ConversationMemory::new();
-        memory.add_message(ChatMessage::user("x".repeat(400).to_string()));
-        // 400 chars / 4 + 10 overhead = 110
-        assert_eq!(memory.estimate_tokens(), 110);
     }
 
     #[test]

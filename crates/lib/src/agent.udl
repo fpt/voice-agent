@@ -101,10 +101,6 @@ interface Agent {
 
     void add_skill(string name, string description, string prompt);
 
-    // The backend owns its own tool set, so there is no per-turn tool filtering
-    // to pass here — an `allowed_tools` argument would be silently discarded.
-    [Throws=AgentError]
-    AgentResponse observe(string prompt);
 
     sequence<CaptureRequest> drain_capture_requests();
 
