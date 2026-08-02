@@ -93,8 +93,6 @@ interface Agent {
     [Throws=AgentError]
     AgentResponse step(string user_input);
 
-    string? process_backchannel(string partial_input, u64 pause_ms);
-
     void reset();
 
     string get_conversation_history();
@@ -103,11 +101,10 @@ interface Agent {
 
     void add_skill(string name, string description, string prompt);
 
+    // The backend owns its own tool set, so there is no per-turn tool filtering
+    // to pass here — an `allowed_tools` argument would be silently discarded.
     [Throws=AgentError]
-    AgentResponse step_with_allowed_tools(string user_input, sequence<string> allowed_tools);
-
-    [Throws=AgentError]
-    AgentResponse observe(string prompt, sequence<string> allowed_tools);
+    AgentResponse observe(string prompt);
 
     sequence<CaptureRequest> drain_capture_requests();
 

@@ -35,19 +35,18 @@ the split (voice-agent = platform + app-server client; the agent core lives in
 
 | File | Purpose |
 |------|---------|
-| `lib/src/lib.rs` | `Agent` struct + UniFFI exports. Spawns the backend, forwards config as env, serves client tools, drives turns. Goals, situation, backchannel, and the conversation mirror stay local. |
+| `lib/src/lib.rs` | `Agent` struct + UniFFI exports. Spawns the backend, forwards config as env, serves client tools, drives turns. Goals, situation, and the conversation mirror stay local. |
 | `lib/src/app_server_client.rs` | app-server client: spawns `gallium app-server` (etc.) and drives it over line-delimited JSON-RPC, reusing the symmetric `appserver::rpc` transport. Sends `initialize`/`thread/start`/`turn/start`; handles inbound `item/tool/call` + approval requests. `ClientTool`/`HandlerClientTool` wrap any `ToolHandler` to serve it back to the backend. |
 | `lib/src/appserver/rpc.rs` | Symmetric JSON-RPC 2.0 transport over stdio (answers inbound requests on their own threads, delivers inbound responses to outbound requests). Shared by the app-server client. |
 | `lib/src/appserver/mod.rs` | Just re-exports `rpc` now (the in-process server was removed with the agent core). |
-| `lib/src/llm.rs` | Shared data types only: `ChatMessage`, `ChatRole`, `TokenUsage`, `ImageContent`, `ToolDefinition`, `ToolCallInfo`. No provider layer. |
+| `lib/src/llm.rs` | Shared data types only: `ChatMessage`, `ChatRole`, `TokenUsage`, `ImageContent`. No provider layer. |
 | `lib/src/mcp.rs` | JSON-RPC 2.0 / MCP wire-type constants used by `rpc.rs`. |
-| `lib/src/tool.rs` | The tool trait surface the capture/situation client tools implement: `ToolHandler`, `ToolResult`, `ToolRegistry`, `ToolAccess`. (The built-in file/bash tools and their permission machinery were removed — the backend owns those now.) |
+| `lib/src/tool.rs` | The tool trait surface the capture/situation client tools implement: `ToolHandler`, `ToolResult`. (The built-in file/bash tools, their permission machinery, and the in-process `ToolRegistry` were removed — the backend owns tool dispatch now.) |
 | `lib/src/capture.rs` | Screen capture / find-window / OCR / list-windows tools (executed macOS-side via Swift; served to the backend as client tools). |
 | `lib/src/situation.rs` | `SituationMessages` ambient-context stack + `read_situation_messages` client tool. Fed by the frontend's periodic window-list poller (`push_situation_message`). |
 | `lib/src/goal.rs` | Session goal state + evaluation (runs on a throwaway backend thread). |
 | `lib/src/skill.rs` | `SkillRegistry`; skill catalogs are injected into the backend thread's developer instructions. |
 | `lib/src/memory.rs` | `ConversationMemory` — the local mirror of the conversation (authoritative history lives in the backend thread). |
-| `lib/src/state_updater.rs` | Rule-based backchannel detection. |
 | `lib/src/agent.udl` | UniFFI interface definition. |
 
 ### Swift Packages (`swift/Sources/`)
@@ -67,7 +66,7 @@ the split (voice-agent = platform + app-server client; the agent core lives in
 
 - **voice-agent runs no inference.** `agent_new` spawns the backend (`backend_command()` — `gallium` by default, override with `VOICE_AGENT_BACKEND`), forwards model/API config as environment (`MODEL_PATH`, `OPENAI_API_KEY`, `LLM_BASE_URL`, `LLM_MODEL`, `INFERENCE_ENGINE`, …), and drives turns. `step`/`observe`/`evaluate_goal` each run a backend turn; `observe`/`evaluate_goal` use throwaway threads so they don't pollute history.
 - **Client tools** (`app_server_client::ClientTool`): screen `capture`, `read_situation_messages`, and `suggest_next_check` are registered as the backend's `dynamicTools`. The backend's model calls them; the request arrives as an inbound `item/tool/call` and executes against resident voice-agent state. `HandlerClientTool` adapts any `ToolHandler` verbatim.
-- `ChatMessage` has `#[serde(skip)]` fields for tool state; use helper methods (`ChatMessage::user()`, `ChatMessage::assistant()`, etc.) not struct literals.
+- Build `ChatMessage` with its helper constructors (`ChatMessage::user()`, `ChatMessage::assistant()`, `ChatMessage::system()`), not struct literals.
 - The transport (`appserver::rpc`) is **bidirectional** — inbound requests are dispatched on their own threads so a long `turn/start` can originate tool-call requests while the reader keeps running.
 - **Approvals**: `agent_new` takes an optional `MutationApprover` (a UniFFI foreign trait). When one is supplied, the main conversation thread opens with `approvalPolicy: "untrusted"` so the backend escalates every file write / shell command; the request arrives as an inbound `item/{fileChange,commandExecution}/requestApproval` and is routed to the approver, which blocks the turn until it answers allow-once / allow-session / deny. The macOS CLI's `ReplApprover` prompts on stdin in text mode, denies in voice mode (no safe way to confirm by speech), and auto-allows for one-shot `--prompt`. **With no approver the main thread opens `"never"` and the backend runs mutations autonomously** (this is what Windows does today, and it's why unconfigured builds edit files without asking). Throwaway `observe`/`evaluate_goal` threads always use `"never"` — they must not block on a prompt. voice-agent has no sandbox.
 - Half-duplex: `AudioCapture.mute()`/`unmute()` drops audio buffers during TTS playback.

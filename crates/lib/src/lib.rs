@@ -7,7 +7,6 @@ pub mod mcp;
 mod memory;
 pub mod situation;
 pub mod skill;
-mod state_updater;
 pub mod tool;
 
 use parking_lot::Mutex;
@@ -20,7 +19,6 @@ use serde_json::{json, Value};
 pub use capture::CaptureRequest;
 pub use llm::{ChatMessage, ChatRole, TokenUsage};
 pub use memory::ConversationMemory;
-pub use state_updater::{BackchannelDetector, RuleBasedBackchannelDetector};
 
 // UniFFI generated code
 uniffi::include_scaffolding!("agent");
@@ -237,7 +235,6 @@ pub struct Agent {
     /// Local mirror of the conversation, for `get_conversation_history` and goal
     /// evaluation (the authoritative history lives in the backend thread).
     memory: Arc<Mutex<ConversationMemory>>,
-    backchannel_detector: Box<dyn BackchannelDetector>,
     system_prompt: Arc<Mutex<Option<String>>>,
     skill_registry: Arc<skill::SkillRegistry>,
     situation: Arc<situation::SituationMessages>,
@@ -385,7 +382,6 @@ pub fn agent_new(
         config,
         client,
         memory: Arc::new(Mutex::new(ConversationMemory::new())),
-        backchannel_detector: Box::new(RuleBasedBackchannelDetector::new()),
         system_prompt: Arc::new(Mutex::new(None)),
         skill_registry,
         situation,
@@ -490,20 +486,6 @@ impl Agent {
         Ok(self.make_response(reply, self.suggested_next_check()))
     }
 
-    /// Process a backchannel event (audio only, no history pollution)
-    pub fn process_backchannel(&self, partial_input: String, pause_ms: u64) -> Option<String> {
-        if let Some(backchannel_text) = self
-            .backchannel_detector
-            .should_backchannel(&partial_input, pause_ms)
-        {
-            let mut memory = self.memory.lock();
-            memory.add_backchannel();
-            tracing::debug!("Backchannel triggered: '{}'", backchannel_text);
-            return Some(backchannel_text);
-        }
-        None
-    }
-
     /// Reset the conversation: clear the local mirror and open a fresh backend
     /// thread on the next turn.
     pub fn reset(&self) {
@@ -531,25 +513,11 @@ impl Agent {
         self.skill_registry.add(name, description, prompt);
     }
 
-    /// The backend owns its own tool set, so per-turn tool filtering is not
-    /// enforced here; behaves like [`step`](Self::step).
-    pub fn step_with_allowed_tools(
-        &self,
-        user_input: String,
-        _allowed_tools: Vec<String>,
-    ) -> Result<AgentResponse, AgentError> {
-        self.step(user_input)
-    }
-
     /// Run a one-shot, **non-persisting** turn for ambient/background observation
     /// (the `/loop` ambient mode) on a throwaway backend thread, so periodic
     /// checks don't pollute the conversation. `allowed_tools` is advisory only —
     /// the backend owns its tool set — but the pacing hint still flows back.
-    pub fn observe(
-        &self,
-        prompt: String,
-        _allowed_tools: Vec<String>,
-    ) -> Result<AgentResponse, AgentError> {
+    pub fn observe(&self, prompt: String) -> Result<AgentResponse, AgentError> {
         self.next_check.store(0, Ordering::SeqCst);
         let instr = self.developer_instructions();
         let thread = self.client.open_thread(

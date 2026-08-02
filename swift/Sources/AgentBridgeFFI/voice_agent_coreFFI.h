@@ -308,12 +308,7 @@ RustBuffer uniffi_voice_agent_core_fn_method_agent_goal_status(void*_Nonnull ptr
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_VOICE_AGENT_CORE_FN_METHOD_AGENT_OBSERVE
 #define UNIFFI_FFIDEF_UNIFFI_VOICE_AGENT_CORE_FN_METHOD_AGENT_OBSERVE
-RustBuffer uniffi_voice_agent_core_fn_method_agent_observe(void*_Nonnull ptr, RustBuffer prompt, RustBuffer allowed_tools, RustCallStatus *_Nonnull out_status
-);
-#endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_VOICE_AGENT_CORE_FN_METHOD_AGENT_PROCESS_BACKCHANNEL
-#define UNIFFI_FFIDEF_UNIFFI_VOICE_AGENT_CORE_FN_METHOD_AGENT_PROCESS_BACKCHANNEL
-RustBuffer uniffi_voice_agent_core_fn_method_agent_process_backchannel(void*_Nonnull ptr, RustBuffer partial_input, uint64_t pause_ms, RustCallStatus *_Nonnull out_status
+RustBuffer uniffi_voice_agent_core_fn_method_agent_observe(void*_Nonnull ptr, RustBuffer prompt, RustCallStatus *_Nonnull out_status
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_VOICE_AGENT_CORE_FN_METHOD_AGENT_PUSH_SITUATION_MESSAGE
@@ -339,11 +334,6 @@ void uniffi_voice_agent_core_fn_method_agent_set_system_prompt(void*_Nonnull ptr
 #ifndef UNIFFI_FFIDEF_UNIFFI_VOICE_AGENT_CORE_FN_METHOD_AGENT_STEP
 #define UNIFFI_FFIDEF_UNIFFI_VOICE_AGENT_CORE_FN_METHOD_AGENT_STEP
 RustBuffer uniffi_voice_agent_core_fn_method_agent_step(void*_Nonnull ptr, RustBuffer user_input, RustCallStatus *_Nonnull out_status
-);
-#endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_VOICE_AGENT_CORE_FN_METHOD_AGENT_STEP_WITH_ALLOWED_TOOLS
-#define UNIFFI_FFIDEF_UNIFFI_VOICE_AGENT_CORE_FN_METHOD_AGENT_STEP_WITH_ALLOWED_TOOLS
-RustBuffer uniffi_voice_agent_core_fn_method_agent_step_with_allowed_tools(void*_Nonnull ptr, RustBuffer user_input, RustBuffer allowed_tools, RustCallStatus *_Nonnull out_status
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_VOICE_AGENT_CORE_FN_METHOD_AGENT_SUBMIT_CAPTURE_RESULT
@@ -704,12 +694,6 @@ uint16_t uniffi_voice_agent_core_checksum_method_agent_observe(void
     
 );
 #endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_VOICE_AGENT_CORE_CHECKSUM_METHOD_AGENT_PROCESS_BACKCHANNEL
-#define UNIFFI_FFIDEF_UNIFFI_VOICE_AGENT_CORE_CHECKSUM_METHOD_AGENT_PROCESS_BACKCHANNEL
-uint16_t uniffi_voice_agent_core_checksum_method_agent_process_backchannel(void
-    
-);
-#endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_VOICE_AGENT_CORE_CHECKSUM_METHOD_AGENT_PUSH_SITUATION_MESSAGE
 #define UNIFFI_FFIDEF_UNIFFI_VOICE_AGENT_CORE_CHECKSUM_METHOD_AGENT_PUSH_SITUATION_MESSAGE
 uint16_t uniffi_voice_agent_core_checksum_method_agent_push_situation_message(void
@@ -737,12 +721,6 @@ uint16_t uniffi_voice_agent_core_checksum_method_agent_set_system_prompt(void
 #ifndef UNIFFI_FFIDEF_UNIFFI_VOICE_AGENT_CORE_CHECKSUM_METHOD_AGENT_STEP
 #define UNIFFI_FFIDEF_UNIFFI_VOICE_AGENT_CORE_CHECKSUM_METHOD_AGENT_STEP
 uint16_t uniffi_voice_agent_core_checksum_method_agent_step(void
-    
-);
-#endif
-#ifndef UNIFFI_FFIDEF_UNIFFI_VOICE_AGENT_CORE_CHECKSUM_METHOD_AGENT_STEP_WITH_ALLOWED_TOOLS
-#define UNIFFI_FFIDEF_UNIFFI_VOICE_AGENT_CORE_CHECKSUM_METHOD_AGENT_STEP_WITH_ALLOWED_TOOLS
-uint16_t uniffi_voice_agent_core_checksum_method_agent_step_with_allowed_tools(void
     
 );
 #endif
