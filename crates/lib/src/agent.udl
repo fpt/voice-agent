@@ -40,10 +40,8 @@ dictionary AgentConfig {
     string base_url;
     string model;
     string? api_key;
-    boolean use_harmony_template;
     f32? temperature;
     u32 max_tokens;
-    u32 context_window;
     string? language;
     string? working_dir;
     string? reasoning_effort;

@@ -428,7 +428,7 @@ func runOneShot(_ prompt: String) async {
         if let reasoning = response.reasoning {
             print("\u{1B}[90m💭 \(reasoning)\u{1B}[0m\n")
         }
-        print(session.formatResponse(response.content))
+        print(response.content)
     } catch {
         logger.error("Agent error: \(error)")
         print("Error: \(error)")
@@ -541,7 +541,7 @@ Editing: Left/Right move the cursor, Up/Down walk history (persisted to
                 throw error
             }
             await turnGate.unlock()
-            let finalResponse = session.formatResponse(response.content)
+            let finalResponse = response.content
 
             if let reasoning = response.reasoning {
                 print("\u{1B}[90m💭 \(reasoning)\u{1B}[0m\n")
@@ -619,7 +619,7 @@ func runLoopTurn(_ prompt: String, muteMic: Bool) async -> AgentResponse? {
         print("\u{1B}[90m[loop] turn failed: \(error)\u{1B}[0m")
         return nil
     }
-    let text = session.formatResponse(response.content)
+    let text = response.content
     if let reasoning = response.reasoning {
         print("\n\u{1B}[90m💭 \(reasoning)\u{1B}[0m")
     }
@@ -762,7 +762,7 @@ func runContinuousVoiceMode() async {
             do {
                 let response = try session.step(combined)
                 await turnGate.unlock()
-                let text = session.formatResponse(response.content)
+                let text = response.content
                 await MainActor.run {
                     if let reasoning = response.reasoning {
                         print("\u{1B}[90m💭 \(reasoning)\u{1B}[0m\n")
