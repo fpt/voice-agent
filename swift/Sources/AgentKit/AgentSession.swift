@@ -55,16 +55,13 @@ public class AgentSession: @unchecked Sendable {
         let mcpServers = (config.mcpServers ?? []).map {
             McpServerConfig(command: $0.command ?? "", args: $0.args ?? [], url: $0.url)
         }
-        let contextWindow = config.llm.contextWindow.map { UInt32($0) } ?? 128_000
         let agentConfig = AgentConfig(
             modelPath: modelPath,
             baseUrl: config.llm.baseURL ?? "",
             model: config.llm.model ?? "",
             apiKey: apiKey,
-            useHarmonyTemplate: config.llm.harmonyTemplate,
             temperature: config.llm.temperature,
             maxTokens: UInt32(config.llm.maxTokens),
-            contextWindow: contextWindow,
             language: language,
             workingDir: FileManager.default.currentDirectoryPath,
             reasoningEffort: config.llm.reasoningEffort,
@@ -176,13 +173,6 @@ public class AgentSession: @unchecked Sendable {
         default:
             return false
         }
-    }
-
-    /// Format response text (strip Harmony wrapper if needed).
-    public func formatResponse(_ text: String) -> String {
-        config.llm.harmonyTemplate
-            ? HarmonyParser.extractFinalResponse(text)
-            : text
     }
 
 }

@@ -14,10 +14,9 @@
 backend: "codex"
 
 llm:
-  baseURL: "https://api.openai.com/v1"  # forwarded as LLM_BASE_URL
+  baseURL: ""  # forwarded as LLM_BASE_URL
   model: "gpt-5.6-luna"                 # forwarded as LLM_MODEL
   apiKey: ""                            # empty → read from OPENAI_API_KEY env var
-  harmonyTemplate: false
   maxTokens: 8192
   reasoningEffort: "medium"             # low | medium | high (reasoning-capable models)
 

@@ -59,7 +59,7 @@ the split (voice-agent = platform + app-server client; the agent core lives in
 | `Audio` | AudioCapture (mic -> SpeechTranscriber), VoiceProcessingIO |
 | `TTS` | AVSpeechSynthesizer wrapper |
 | `ScreenCapture` | WindowManager / window info for the capture client tools |
-| `Util` | Config, Logger, HarmonyParser, SkillLoader |
+| `Util` | Config, Logger, SkillLoader |
 | `AgentBridge` | Generated UniFFI Swift bindings |
 | `AgentBridgeFFI` | C module map for FFI |
 

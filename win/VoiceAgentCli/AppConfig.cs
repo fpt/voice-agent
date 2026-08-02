@@ -51,17 +51,11 @@ public sealed class AppConfig
         [YamlMember(Alias = "apiKey")]
         public string? ApiKey { get; set; }
 
-        [YamlMember(Alias = "harmonyTemplate")]
-        public bool HarmonyTemplate { get; set; }
-
         [YamlMember(Alias = "temperature")]
         public float? Temperature { get; set; }
 
         [YamlMember(Alias = "maxTokens")]
         public int MaxTokens { get; set; } = 2048;
-
-        [YamlMember(Alias = "contextWindow")]
-        public int? ContextWindow { get; set; }
 
         [YamlMember(Alias = "reasoningEffort")]
         public string? ReasoningEffort { get; set; }

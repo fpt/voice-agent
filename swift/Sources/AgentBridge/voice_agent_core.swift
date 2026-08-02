@@ -966,10 +966,8 @@ public struct AgentConfig {
     public var baseUrl: String
     public var model: String
     public var apiKey: String?
-    public var useHarmonyTemplate: Bool
     public var temperature: Float?
     public var maxTokens: UInt32
-    public var contextWindow: UInt32
     public var language: String?
     public var workingDir: String?
     public var reasoningEffort: String?
@@ -979,15 +977,13 @@ public struct AgentConfig {
 
     // Default memberwise initializers are never public by default, so we
     // declare one manually.
-    public init(modelPath: String?, baseUrl: String, model: String, apiKey: String?, useHarmonyTemplate: Bool, temperature: Float?, maxTokens: UInt32, contextWindow: UInt32, language: String?, workingDir: String?, reasoningEffort: String?, inferenceEngine: String?, backend: String?, mcpServers: [McpServerConfig]) {
+    public init(modelPath: String?, baseUrl: String, model: String, apiKey: String?, temperature: Float?, maxTokens: UInt32, language: String?, workingDir: String?, reasoningEffort: String?, inferenceEngine: String?, backend: String?, mcpServers: [McpServerConfig]) {
         self.modelPath = modelPath
         self.baseUrl = baseUrl
         self.model = model
         self.apiKey = apiKey
-        self.useHarmonyTemplate = useHarmonyTemplate
         self.temperature = temperature
         self.maxTokens = maxTokens
-        self.contextWindow = contextWindow
         self.language = language
         self.workingDir = workingDir
         self.reasoningEffort = reasoningEffort
@@ -1013,16 +1009,10 @@ extension AgentConfig: Equatable, Hashable {
         if lhs.apiKey != rhs.apiKey {
             return false
         }
-        if lhs.useHarmonyTemplate != rhs.useHarmonyTemplate {
-            return false
-        }
         if lhs.temperature != rhs.temperature {
             return false
         }
         if lhs.maxTokens != rhs.maxTokens {
-            return false
-        }
-        if lhs.contextWindow != rhs.contextWindow {
             return false
         }
         if lhs.language != rhs.language {
@@ -1051,10 +1041,8 @@ extension AgentConfig: Equatable, Hashable {
         hasher.combine(baseUrl)
         hasher.combine(model)
         hasher.combine(apiKey)
-        hasher.combine(useHarmonyTemplate)
         hasher.combine(temperature)
         hasher.combine(maxTokens)
-        hasher.combine(contextWindow)
         hasher.combine(language)
         hasher.combine(workingDir)
         hasher.combine(reasoningEffort)
@@ -1076,10 +1064,8 @@ public struct FfiConverterTypeAgentConfig: FfiConverterRustBuffer {
                 baseUrl: FfiConverterString.read(from: &buf), 
                 model: FfiConverterString.read(from: &buf), 
                 apiKey: FfiConverterOptionString.read(from: &buf), 
-                useHarmonyTemplate: FfiConverterBool.read(from: &buf), 
                 temperature: FfiConverterOptionFloat.read(from: &buf), 
                 maxTokens: FfiConverterUInt32.read(from: &buf), 
-                contextWindow: FfiConverterUInt32.read(from: &buf), 
                 language: FfiConverterOptionString.read(from: &buf), 
                 workingDir: FfiConverterOptionString.read(from: &buf), 
                 reasoningEffort: FfiConverterOptionString.read(from: &buf), 
@@ -1094,10 +1080,8 @@ public struct FfiConverterTypeAgentConfig: FfiConverterRustBuffer {
         FfiConverterString.write(value.baseUrl, into: &buf)
         FfiConverterString.write(value.model, into: &buf)
         FfiConverterOptionString.write(value.apiKey, into: &buf)
-        FfiConverterBool.write(value.useHarmonyTemplate, into: &buf)
         FfiConverterOptionFloat.write(value.temperature, into: &buf)
         FfiConverterUInt32.write(value.maxTokens, into: &buf)
-        FfiConverterUInt32.write(value.contextWindow, into: &buf)
         FfiConverterOptionString.write(value.language, into: &buf)
         FfiConverterOptionString.write(value.workingDir, into: &buf)
         FfiConverterOptionString.write(value.reasoningEffort, into: &buf)

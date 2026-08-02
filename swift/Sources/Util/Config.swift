@@ -52,10 +52,8 @@ public struct Config: Codable {
         public let baseURL: String?
         public let model: String?
         public let apiKey: String?
-        public let harmonyTemplate: Bool
         public let temperature: Float?
         public let maxTokens: Int
-        public let contextWindow: Int?
         /// Local GGUF. Either a path, or an `hf:ORG/REPO[@REV]/file.gguf` spec that
         /// the Rust model downloader resolves and fetches into the HF cache.
         public let modelPath: String?
@@ -68,10 +66,8 @@ public struct Config: Codable {
             case baseURL = "baseURL"
             case model
             case apiKey
-            case harmonyTemplate
             case temperature
             case maxTokens
-            case contextWindow
             case modelPath
             case reasoningEffort
             case inferenceEngine
@@ -154,10 +150,8 @@ public struct Config: Codable {
                 baseURL: "http://127.0.0.1:8080/v1",
                 model: "gpt-oss-20b",
                 apiKey: nil,
-                harmonyTemplate: true,
                 temperature: 0.7,
                 maxTokens: 4096,
-                contextWindow: nil,
                 modelPath: nil,
                 reasoningEffort: nil,
                 inferenceEngine: nil
