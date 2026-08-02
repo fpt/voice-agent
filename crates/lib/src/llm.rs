@@ -50,15 +50,6 @@ pub struct ChatMessage {
     /// Images attached to this message (for vision models)
     #[serde(skip)]
     pub images: Vec<ImageContent>,
-    /// Tool calls made by assistant (set by ReAct loop)
-    #[serde(skip)]
-    pub tool_calls: Option<Vec<ToolCallInfo>>,
-    /// Tool call ID this message is responding to (for role=Tool)
-    #[serde(skip)]
-    pub tool_call_id: Option<String>,
-    /// Tool name this message is responding to (for role=Tool)
-    #[serde(skip)]
-    pub tool_name: Option<String>,
 }
 
 impl ChatMessage {
@@ -67,9 +58,6 @@ impl ChatMessage {
             role: ChatRole::User,
             content,
             images: vec![],
-            tool_calls: None,
-            tool_call_id: None,
-            tool_name: None,
         }
     }
 
@@ -78,9 +66,6 @@ impl ChatMessage {
             role: ChatRole::Assistant,
             content,
             images: vec![],
-            tool_calls: None,
-            tool_call_id: None,
-            tool_name: None,
         }
     }
 
@@ -89,63 +74,6 @@ impl ChatMessage {
             role: ChatRole::System,
             content,
             images: vec![],
-            tool_calls: None,
-            tool_call_id: None,
-            tool_name: None,
         }
     }
-
-    pub fn assistant_tool_calls(calls: Vec<ToolCallInfo>) -> Self {
-        Self {
-            role: ChatRole::Assistant,
-            content: String::new(),
-            images: vec![],
-            tool_calls: Some(calls),
-            tool_call_id: None,
-            tool_name: None,
-        }
-    }
-
-    pub fn tool_result(call_id: String, name: String, content: String) -> Self {
-        Self {
-            role: ChatRole::Tool,
-            content,
-            images: vec![],
-            tool_calls: None,
-            tool_call_id: Some(call_id),
-            tool_name: Some(name),
-        }
-    }
-
-    pub fn tool_result_with_images(
-        call_id: String,
-        name: String,
-        content: String,
-        images: Vec<ImageContent>,
-    ) -> Self {
-        Self {
-            role: ChatRole::Tool,
-            content,
-            images,
-            tool_calls: None,
-            tool_call_id: Some(call_id),
-            tool_name: Some(name),
-        }
-    }
-}
-
-/// Tool definition for LLM
-#[derive(Debug, Clone)]
-pub struct ToolDefinition {
-    pub name: String,
-    pub description: String,
-    pub parameters: serde_json::Value,
-}
-
-/// A tool call recorded on an assistant [`ChatMessage`].
-#[derive(Debug, Clone)]
-pub struct ToolCallInfo {
-    pub id: String,
-    pub name: String,
-    pub arguments: serde_json::Value,
 }

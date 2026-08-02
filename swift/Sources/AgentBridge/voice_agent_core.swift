@@ -542,9 +542,7 @@ public protocol AgentProtocol : AnyObject {
     
     func goalStatus()  -> GoalStatus?
     
-    func observe(prompt: String, allowedTools: [String]) throws  -> AgentResponse
-    
-    func processBackchannel(partialInput: String, pauseMs: UInt64)  -> String?
+    func observe(prompt: String) throws  -> AgentResponse
     
     func pushSituationMessage(text: String, source: String, sessionId: String) 
     
@@ -555,8 +553,6 @@ public protocol AgentProtocol : AnyObject {
     func setSystemPrompt(prompt: String) 
     
     func step(userInput: String) throws  -> AgentResponse
-    
-    func stepWithAllowedTools(userInput: String, allowedTools: [String]) throws  -> AgentResponse
     
     func submitCaptureResult(id: String, imageBase64: String, metadataJson: String) 
     
@@ -655,20 +651,10 @@ open func goalStatus() -> GoalStatus? {
 })
 }
     
-open func observe(prompt: String, allowedTools: [String])throws  -> AgentResponse {
+open func observe(prompt: String)throws  -> AgentResponse {
     return try  FfiConverterTypeAgentResponse.lift(try rustCallWithError(FfiConverterTypeAgentError.lift) {
     uniffi_voice_agent_core_fn_method_agent_observe(self.uniffiClonePointer(),
-        FfiConverterString.lower(prompt),
-        FfiConverterSequenceString.lower(allowedTools),$0
-    )
-})
-}
-    
-open func processBackchannel(partialInput: String, pauseMs: UInt64) -> String? {
-    return try!  FfiConverterOptionString.lift(try! rustCall() {
-    uniffi_voice_agent_core_fn_method_agent_process_backchannel(self.uniffiClonePointer(),
-        FfiConverterString.lower(partialInput),
-        FfiConverterUInt64.lower(pauseMs),$0
+        FfiConverterString.lower(prompt),$0
     )
 })
 }
@@ -706,15 +692,6 @@ open func step(userInput: String)throws  -> AgentResponse {
     return try  FfiConverterTypeAgentResponse.lift(try rustCallWithError(FfiConverterTypeAgentError.lift) {
     uniffi_voice_agent_core_fn_method_agent_step(self.uniffiClonePointer(),
         FfiConverterString.lower(userInput),$0
-    )
-})
-}
-    
-open func stepWithAllowedTools(userInput: String, allowedTools: [String])throws  -> AgentResponse {
-    return try  FfiConverterTypeAgentResponse.lift(try rustCallWithError(FfiConverterTypeAgentError.lift) {
-    uniffi_voice_agent_core_fn_method_agent_step_with_allowed_tools(self.uniffiClonePointer(),
-        FfiConverterString.lower(userInput),
-        FfiConverterSequenceString.lower(allowedTools),$0
     )
 })
 }
@@ -2041,10 +2018,7 @@ private var initializationResult: InitializationResult = {
     if (uniffi_voice_agent_core_checksum_method_agent_goal_status() != 57962) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_voice_agent_core_checksum_method_agent_observe() != 40) {
-        return InitializationResult.apiChecksumMismatch
-    }
-    if (uniffi_voice_agent_core_checksum_method_agent_process_backchannel() != 27285) {
+    if (uniffi_voice_agent_core_checksum_method_agent_observe() != 29087) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_voice_agent_core_checksum_method_agent_push_situation_message() != 40141) {
@@ -2060,9 +2034,6 @@ private var initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_voice_agent_core_checksum_method_agent_step() != 17531) {
-        return InitializationResult.apiChecksumMismatch
-    }
-    if (uniffi_voice_agent_core_checksum_method_agent_step_with_allowed_tools() != 5365) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_voice_agent_core_checksum_method_agent_submit_capture_result() != 11728) {

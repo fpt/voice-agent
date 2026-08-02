@@ -1,19 +1,9 @@
 use crate::llm::{ChatMessage, ChatRole};
 
-/// Backchannel marker in message history
-const BACKCHANNEL_MARKER: &str = "⟂";
-
-/// Message with backchannel flag
-#[derive(Debug, Clone)]
-struct MessageEntry {
-    message: ChatMessage,
-    is_backchannel: bool,
-}
-
 /// Conversation memory manager.
 #[derive(Debug, Clone)]
 pub struct ConversationMemory {
-    messages: Vec<MessageEntry>,
+    messages: Vec<ChatMessage>,
     max_messages: usize,
 }
 
@@ -31,22 +21,9 @@ impl ConversationMemory {
         }
     }
 
-    /// Add a regular message to the conversation
+    /// Add a message to the conversation
     pub fn add_message(&mut self, message: ChatMessage) {
-        self.messages.push(MessageEntry {
-            message,
-            is_backchannel: false,
-        });
-        self.trim_messages();
-    }
-
-    /// Add a backchannel marker to the conversation
-    /// This is for tempo tracking only — doesn't pollute context
-    pub fn add_backchannel(&mut self) {
-        self.messages.push(MessageEntry {
-            message: ChatMessage::assistant(BACKCHANNEL_MARKER.to_string()),
-            is_backchannel: true,
-        });
+        self.messages.push(message);
         self.trim_messages();
     }
 
@@ -57,7 +34,7 @@ impl ConversationMemory {
             let system_messages: Vec<_> = self
                 .messages
                 .iter()
-                .filter(|e| e.message.role == ChatRole::System)
+                .filter(|m| m.role == ChatRole::System)
                 .cloned()
                 .collect();
 
@@ -68,7 +45,7 @@ impl ConversationMemory {
             let all_non_system: Vec<_> = self
                 .messages
                 .iter()
-                .filter(|e| e.message.role != ChatRole::System)
+                .filter(|m| m.role != ChatRole::System)
                 .cloned()
                 .collect();
 
@@ -88,41 +65,20 @@ impl ConversationMemory {
         }
     }
 
-    /// Get all messages (excluding backchannel markers by default)
+    /// Get all messages
     pub fn get_messages(&self) -> Vec<ChatMessage> {
-        self.messages
-            .iter()
-            .filter(|e| !e.is_backchannel)
-            .map(|e| e.message.clone())
-            .collect()
+        self.messages.clone()
     }
 
-    /// Get all messages including backchannel markers
-    pub fn get_messages_with_backchannels(&self) -> Vec<ChatMessage> {
-        self.messages.iter().map(|e| e.message.clone()).collect()
-    }
-
-    /// Get the last N messages (excluding backchannel markers)
+    /// Get the last N messages
     pub fn get_last_messages(&self, n: usize) -> Vec<ChatMessage> {
-        self.messages
-            .iter()
-            .filter(|e| !e.is_backchannel)
-            .map(|e| e.message.clone())
-            .rev()
-            .take(n)
-            .collect::<Vec<_>>()
-            .into_iter()
-            .rev()
-            .collect()
+        let start = self.messages.len().saturating_sub(n);
+        self.messages[start..].to_vec()
     }
 
-    /// Estimate total token count of non-backchannel messages (~4 chars/token + per-message overhead).
+    /// Estimate total token count (~4 chars/token + per-message overhead).
     pub fn estimate_tokens(&self) -> usize {
-        self.messages
-            .iter()
-            .filter(|e| !e.is_backchannel)
-            .map(|e| e.message.content.len() / 4 + 10)
-            .sum()
+        self.messages.iter().map(|m| m.content.len() / 4 + 10).sum()
     }
 
     /// Drop oldest non-system messages until estimated tokens < `target_tokens`.
@@ -130,17 +86,16 @@ impl ConversationMemory {
     pub fn compact(&mut self, target_tokens: usize) -> usize {
         let mut dropped = 0;
         while self.estimate_tokens() > target_tokens {
-            // Find the first non-system, non-backchannel message
             let pos = self
                 .messages
                 .iter()
-                .position(|e| !e.is_backchannel && e.message.role != ChatRole::System);
+                .position(|m| m.role != ChatRole::System);
             match pos {
                 Some(i) => {
                     self.messages.remove(i);
                     dropped += 1;
                 }
-                None => break, // Only system/backchannel messages left
+                None => break, // Only system messages left
             }
         }
         dropped
@@ -151,13 +106,8 @@ impl ConversationMemory {
         self.messages.clear();
     }
 
-    /// Get the number of messages (excluding backchannel markers)
+    /// Get the number of messages
     pub fn len(&self) -> usize {
-        self.messages.iter().filter(|e| !e.is_backchannel).count()
-    }
-
-    /// Get total number of messages including backchannel markers
-    pub fn total_len(&self) -> usize {
         self.messages.len()
     }
 
@@ -250,8 +200,7 @@ mod tests {
         // - System messages are kept
         // - Last 2 non-system messages are kept (capacity - system_count)
         // - Total: 1 system + 2 user = 3 messages
-        assert_eq!(memory.total_len(), 3);
-        assert_eq!(memory.len(), 3); // All are non-backchannel
+        assert_eq!(memory.len(), 3);
 
         let messages = memory.get_messages();
         assert_eq!(messages.len(), 3);
