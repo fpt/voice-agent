@@ -66,7 +66,7 @@ kAUVoiceIOProperty_BypassVoiceProcessing = 0  // Enable voice processing
 
 **Input Path (Microphone)**:
 ```
-Hardware Mic → Input Bus (Bus 1) → AEC → Render Callback → Float32 samples → WhisperKit
+Hardware Mic → Input Bus (Bus 1) → AEC → Render Callback → Float32 samples → SpeechTranscriber
 ```
 
 **Output Path (TTS - Future)**:
