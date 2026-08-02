@@ -2,7 +2,7 @@
 # Build Rust voice_agent_core for iOS (device + simulator).
 # Produces an XCFramework at swift/AgentApp/voice_agent_core.xcframework
 #
-# voice-agent is a pure ACP client (no in-process inference), so the core has no
+# voice-agent is a pure app-server client (no in-process inference), so the core has no
 # feature flags — one build covers every target.
 #
 # Usage: bash scripts/build-ios.sh

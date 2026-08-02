@@ -1,4 +1,4 @@
-pub mod acp_client;
+pub mod app_server_client;
 pub mod appserver;
 pub mod capture;
 pub mod goal;
@@ -121,12 +121,12 @@ pub enum AgentError {
 // Backend process wiring
 // ============================================================================
 
-/// The backend agent command to spawn. `VOICE_AGENT_ACP_BACKEND` overrides it (may be
+/// The backend agent command to spawn. `VOICE_AGENT_BACKEND` overrides it (may be
 /// `"prog arg1 arg2"`); default is `gallium` on `PATH` (the rs-gallium
 /// app-server binary). The `app-server` argument is appended by
-/// [`acp_client::AcpClient::spawn`].
+/// [`app_server_client::AppServerClient::spawn`].
 fn backend_command() -> (String, Vec<String>) {
-    let spec = std::env::var("VOICE_AGENT_ACP_BACKEND").unwrap_or_else(|_| "gallium".to_string());
+    let spec = std::env::var("VOICE_AGENT_BACKEND").unwrap_or_else(|_| "gallium".to_string());
     let mut parts = spec.split_whitespace();
     let program = parts.next().unwrap_or("gallium").to_string();
     let args: Vec<String> = parts.map(String::from).collect();
@@ -162,12 +162,12 @@ fn backend_envs(config: &AgentConfig) -> Vec<(String, String)> {
 
 /// The ambient loop's self-pacing tool, served client-side so the cadence hint
 /// the backend model chooses lands back here (the in-process version shared an
-/// `AtomicU64` with the tool; over ACP the client tool writes the same cell).
+/// `AtomicU64` with the tool; over the wire the client tool writes the same cell).
 struct SuggestNextCheckClientTool {
     next_check: Arc<AtomicU64>,
 }
 
-impl acp_client::ClientTool for SuggestNextCheckClientTool {
+impl app_server_client::ClientTool for SuggestNextCheckClientTool {
     fn name(&self) -> &str {
         "suggest_next_check"
     }
@@ -197,17 +197,17 @@ impl acp_client::ClientTool for SuggestNextCheckClientTool {
 }
 
 // ============================================================================
-// Agent — an ACP client driving a backend agent process
+// Agent — an app-server client driving a backend agent process
 // ============================================================================
 
 /// The voice-assistant agent. It no longer runs inference in-process: it spawns a
 /// backend agent (`gallium-agent app-server` by default) and drives it a turn at
-/// a time over ACP, serving screen `capture`, situation, and pacing tools back to
+/// a time over the app-server protocol, serving screen `capture`, situation, and
 /// it as client tools. Goals, situation, and backchannel remain local
 /// orchestration here.
 pub struct Agent {
     config: AgentConfig,
-    client: Arc<acp_client::AcpClient>,
+    client: Arc<app_server_client::AppServerClient>,
     /// Local mirror of the conversation, for `get_conversation_history` and goal
     /// evaluation (the authoritative history lives in the backend thread).
     memory: Arc<Mutex<ConversationMemory>>,
@@ -259,15 +259,15 @@ pub trait MutationApprover: Send + Sync {
 const MUTATION_APPROVAL_POLICY: &str = "untrusted";
 
 /// Adapts a foreign [`MutationApprover`] (implemented in the frontend, delivered
-/// over UniFFI) to the internal [`acp_client::Approver`] the ACP client calls.
+/// over UniFFI) to the internal [`app_server_client::Approver`] the client calls.
 struct ApproverAdapter(Arc<dyn MutationApprover>);
 
-impl acp_client::Approver for ApproverAdapter {
-    fn approve(&self, action: &str, target: &str) -> acp_client::ApprovalReply {
+impl app_server_client::Approver for ApproverAdapter {
+    fn approve(&self, action: &str, target: &str) -> app_server_client::ApprovalReply {
         match self.0.approve(action.to_string(), target.to_string()) {
-            ApprovalDecision::AllowOnce => acp_client::ApprovalReply::Accept,
-            ApprovalDecision::AllowSession => acp_client::ApprovalReply::AcceptForSession,
-            ApprovalDecision::Deny => acp_client::ApprovalReply::Decline,
+            ApprovalDecision::AllowOnce => app_server_client::ApprovalReply::Accept,
+            ApprovalDecision::AllowSession => app_server_client::ApprovalReply::AcceptForSession,
+            ApprovalDecision::Deny => app_server_client::ApprovalReply::Decline,
         }
     }
 }
@@ -293,7 +293,7 @@ pub fn agent_new(
     // Client tools served back to the backend: screen capture, the situation
     // reader, and the ambient pacing hint. The backend keeps its own
     // file/bash/skill tools — those run there, in the working dir we pass.
-    let mut tools: Vec<Arc<dyn acp_client::ClientTool>> = Vec::new();
+    let mut tools: Vec<Arc<dyn app_server_client::ClientTool>> = Vec::new();
     let capture_handlers: Vec<Box<dyn tool::ToolHandler>> = vec![
         Box::new(capture::CaptureScreenTool::new(
             capture_bridge.request_tx.clone(),
@@ -313,9 +313,9 @@ pub fn agent_new(
         )),
     ];
     for handler in capture_handlers {
-        tools.push(Arc::new(acp_client::HandlerClientTool(handler)));
+        tools.push(Arc::new(app_server_client::HandlerClientTool(handler)));
     }
-    tools.push(Arc::new(acp_client::HandlerClientTool(Box::new(
+    tools.push(Arc::new(app_server_client::HandlerClientTool(Box::new(
         situation::ReadSituationMessagesTool::new(situation.clone()),
     ))));
     tools.push(Arc::new(SuggestNextCheckClientTool {
@@ -326,18 +326,23 @@ pub fn agent_new(
     // mutations (policy "untrusted"), and route those requests to the frontend.
     // No approver means run autonomously — the backend is told "never", so it
     // never raises approval requests (DeclineApprover is then never consulted).
-    let (approver, mutation_policy): (Arc<dyn acp_client::Approver>, String) = match approver {
+    let (approver, mutation_policy): (Arc<dyn app_server_client::Approver>, String) = match approver
+    {
         Some(a) => (
             Arc::new(ApproverAdapter(a)),
             MUTATION_APPROVAL_POLICY.to_string(),
         ),
-        None => (Arc::new(acp_client::DeclineApprover), "never".to_string()),
+        None => (
+            Arc::new(app_server_client::DeclineApprover),
+            "never".to_string(),
+        ),
     };
 
     // Spawn and connect the backend.
     let (program, args) = backend_command();
     let envs = backend_envs(&config);
-    let client = acp_client::AcpClient::spawn(&program, &args, &envs, tools, approver)?;
+    let client =
+        app_server_client::AppServerClient::spawn(&program, &args, &envs, tools, approver)?;
     let user_agent = client
         .initialize("voice-agent")
         .map_err(|e| AgentError::ConfigError(format!("backend handshake failed: {e}")))?;
@@ -493,7 +498,7 @@ impl Agent {
         self.skill_registry.add(name, description, prompt);
     }
 
-    /// Over ACP the backend owns its tool set, so per-turn tool filtering is not
+    /// The backend owns its own tool set, so per-turn tool filtering is not
     /// enforced here; behaves like [`step`](Self::step).
     pub fn step_with_allowed_tools(
         &self,

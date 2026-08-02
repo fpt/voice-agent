@@ -1,7 +1,7 @@
 # voice-agent
 
 A voice-and-text assistant that runs on **macOS and Windows**. voice-agent does
-**no LLM inference of its own** — it is an **ACP client**: it spawns a backend
+**no LLM inference of its own** — it is an **app-server client**: it spawns a backend
 agent and drives it a turn at a time over JSON-RPC, serving its resident tools
 (screen capture, the situation feed) back to the backend.
 
@@ -16,12 +16,12 @@ The frontend is native per platform; the agent backend is a separate binary
 | **Windows** | C# / .NET 8 — `voice-agent.exe` | `System.Speech` recognizer + synthesizer |
 
 The backend is swappable: `gallium` and `codex` both speak the same
-codex-app-server JSON-RPC subset. Select it with `VOICE_AGENT_ACP_BACKEND` (default
+codex-app-server JSON-RPC subset. Select it with `VOICE_AGENT_BACKEND` (default
 `gallium`).
 
 ## Features
 
-- **Backend-agnostic ACP client**: spawns and drives whatever app-server it's pointed at; no local inference or agent loop of its own
+- **Backend-agnostic app-server client**: spawns and drives whatever app-server it's pointed at; no local inference or agent loop of its own
 - **Screen awareness**: window capture / OCR client tools + an ambient situation feed
 - **MCP**: `mcpServers` are forwarded to the backend, which connects them ([details](#mcp))
 - **Voice I/O**: continuous conversation, half-duplex (mic muted during playback to prevent echo)
@@ -31,7 +31,7 @@ codex-app-server JSON-RPC subset. Select it with `VOICE_AGENT_ACP_BACKEND` (defa
 
 **Common**
 - Rust toolchain
-- A backend on PATH — build/install `gallium` from [`../rs-gallium`](https://github.com/fpt/rs-gallium), or point `VOICE_AGENT_ACP_BACKEND` at `codex`
+- A backend on PATH — build/install `gallium` from [`../rs-gallium`](https://github.com/fpt/rs-gallium), or point `VOICE_AGENT_BACKEND` at `codex`
 
 **macOS**
 - macOS 26+ (Apple SpeechTranscriber)
@@ -53,7 +53,7 @@ voice-agent --config configs/gallium.yaml
 
 # ...or a cloud backend
 export OPENAI_API_KEY=sk-...
-VOICE_AGENT_ACP_BACKEND=codex voice-agent --config configs/codex.yaml
+VOICE_AGENT_BACKEND=codex voice-agent --config configs/codex.yaml
 ```
 
 `make install` installs a single binary, **`voice-agent`** (the voice app). The agent
@@ -83,7 +83,7 @@ are shipped, one per backend flavor:
 | config | backend | notes |
 |--------|---------|-------|
 | `gallium.yaml` | `gallium` (default) | local model via the standalone pure-Rust agent |
-| `codex.yaml` | `codex` (cloud) | set `VOICE_AGENT_ACP_BACKEND=codex` + `OPENAI_API_KEY` |
+| `codex.yaml` | `codex` (cloud) | set `VOICE_AGENT_BACKEND=codex` + `OPENAI_API_KEY` |
 
 ```yaml
 llm:                                  # forwarded to the backend as environment
@@ -109,7 +109,7 @@ stt: { enabled: true, locale: "en-US" }
 ```
 
 The `llm:` block is **forwarded to the backend** — voice-agent does not interpret it.
-Backend selection is via `VOICE_AGENT_ACP_BACKEND` (env), not the config.
+Backend selection is via `VOICE_AGENT_BACKEND` (env), not the config.
 
 ## MCP
 
@@ -125,17 +125,23 @@ mcpServers:
   - url: "http://127.0.0.1:27182/mcp"       # Streamable HTTP
 ```
 
-## ACP client
+## app-server client
 
 `voice-agent` spawns the backend (`gallium app-server` by default) and drives it as a
-**whole-turn** ACP client over line-delimited JSON-RPC on stdio — it sends
+**whole-turn** app-server client over line-delimited JSON-RPC on stdio — it sends
 `initialize`/`thread/start`/`turn/start` and handles the backend's inbound
 `item/tool/call` + approval requests. The backend runs its own ReAct loop, tools,
 and MCP connections inside each turn; voice-agent serves the screen capture and
 situation reader back as `dynamicTools`.
 
-Override the backend program with `VOICE_AGENT_ACP_BACKEND` (default `gallium`; may be
+Override the backend program with `VOICE_AGENT_BACKEND` (default `gallium`; may be
 `"prog arg1 arg2"`). See [CLAUDE.md](CLAUDE.md) and [docs/REFACTOR.md](docs/REFACTOR.md).
+
+> **Not ACP.** This is the codex-app-server method set (`thread/start`,
+> `turn/start`, `item/*`), not the [Agent Client
+> Protocol](https://agentclientprotocol.com) — ACP uses `session/new`,
+> `session/prompt`, `fs/*`, `terminal/*` and shares no methods with this beyond
+> `initialize`. Earlier revisions called this an "ACP client"; that was wrong.
 
 ## Skills
 
@@ -182,7 +188,7 @@ Prompt body injected as system context...
 
 ```
 macOS:    Mic -> SpeechTranscriber -> Swift CLI ─┐
-Windows:  Mic -> System.Speech     -> C# CLI   ──┼─> UniFFI -> Rust ACP client
+Windows:  Mic -> System.Speech     -> C# CLI   ──┼─> UniFFI -> Rust app-server client
                                                  │              │  spawns + drives
                                                  │              v
                                                  │       gallium app-server
@@ -190,7 +196,7 @@ Windows:  Mic -> System.Speech     -> C# CLI   ──┼─> UniFFI -> Rust ACP 
                                                  └───<── item/tool/call (capture, situation)
 ```
 
-- **Rust** (`crates/lib`, `voice_agent_core`): ACP client, client tools, and local orchestration (goals, situation, backchannel). No inference.
+- **Rust** (`crates/lib`, `voice_agent_core`): app-server client, client tools, and local orchestration (goals, situation, backchannel). No inference.
 - **Swift** (`swift/`): macOS voice app, audio pipeline, TTS.
 - **C#** (`win/`): Windows frontend.
 - **UniFFI**: generates the Swift and C# bindings to the Rust core.
