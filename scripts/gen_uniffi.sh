@@ -14,7 +14,7 @@ cargo build --release
 echo "🔧 Generating UniFFI Swift bindings..."
 cd lib
 
-LIBRARY_PATH="../target/release/libkessel_core.dylib"
+LIBRARY_PATH="../target/release/libvoice_agent_core.dylib"
 OUT_DIR="$ROOT/vendor/uniffi-swift"
 
 mkdir -p "$OUT_DIR"
@@ -38,11 +38,11 @@ echo "✅ UniFFI bindings generated!"
 # .udl change — which is exactly what broke the McpServerConfig.url field.
 cd "$ROOT"
 echo "📋 Copying generated bindings into the tracked Swift tree..."
-cp vendor/uniffi-swift/kessel_core.swift   swift/Sources/AgentBridge/kessel_core.swift
-cp vendor/uniffi-swift/kessel_coreFFI.h    swift/Sources/AgentBridgeFFI/kessel_coreFFI.h
-cp vendor/uniffi-swift/kessel_coreFFI.h    swift/Sources/AgentBridge/include/kessel_coreFFI.h
+cp vendor/uniffi-swift/voice_agent_core.swift   swift/Sources/AgentBridge/voice_agent_core.swift
+cp vendor/uniffi-swift/voice_agent_coreFFI.h    swift/Sources/AgentBridgeFFI/voice_agent_coreFFI.h
+cp vendor/uniffi-swift/voice_agent_coreFFI.h    swift/Sources/AgentBridge/include/voice_agent_coreFFI.h
 
 echo "✅ Bindings copied. Review & commit:"
-echo "     swift/Sources/AgentBridge/kessel_core.swift"
-echo "     swift/Sources/AgentBridgeFFI/kessel_coreFFI.h"
-echo "     swift/Sources/AgentBridge/include/kessel_coreFFI.h"
+echo "     swift/Sources/AgentBridge/voice_agent_core.swift"
+echo "     swift/Sources/AgentBridgeFFI/voice_agent_coreFFI.h"
+echo "     swift/Sources/AgentBridge/include/voice_agent_coreFFI.h"

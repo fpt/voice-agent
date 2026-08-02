@@ -1,5 +1,5 @@
-module kessel_coreFFI [system] {
-    header "kessel_coreFFI.h"
-    link "kessel_core"
+module voice_agent_coreFFI [system] {
+    header "voice_agent_coreFFI.h"
+    link "voice_agent_core"
     export *
 }

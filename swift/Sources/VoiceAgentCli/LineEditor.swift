@@ -34,7 +34,7 @@ enum LineEditor {
     private nonisolated(unsafe) static var configured = false
 
     /// True when stdin is a terminal. Piped/redirected input (the testsuite,
-    /// `echo … | kessel`) gets plain `readLine()` — libedit would otherwise
+    /// `echo … | voice-agent`) gets plain `readLine()` — libedit would otherwise
     /// echo prompts and control sequences into the captured output.
     static var isInteractive: Bool { isatty(STDIN_FILENO) == 1 }
 
@@ -52,7 +52,7 @@ enum LineEditor {
 
         guard isInteractive else { return }
 
-        rl_readline_name = strdup("kessel")
+        rl_readline_name = strdup("voice-agent")
         rl_initialize()
         using_history()
         stifle_history(1000)
@@ -63,7 +63,7 @@ enum LineEditor {
         )
         read_history(path)
 
-        rl_attempted_completion_function = kesselAttemptedCompletion
+        rl_attempted_completion_function = voiceAgentAttemptedCompletion
     }
 
     /// Read one line, showing `prompt`. Returns nil at EOF (Ctrl+D). Blocking —
@@ -121,7 +121,7 @@ private nonisolated(unsafe) var completionIndex = 0
 
 /// libedit generator: return successive matches for `text`, then NULL. The
 /// returned string must be malloc'd — libedit frees it.
-private func kesselCompletionGenerator(
+private func voiceAgentCompletionGenerator(
     _ text: UnsafePointer<CChar>?, _ state: Int32
 ) -> UnsafeMutablePointer<CChar>? {
     if state == 0 {
@@ -138,11 +138,11 @@ private func kesselCompletionGenerator(
 /// Complete slash commands, and only as the first word — `/re<TAB>` → `/reset`.
 /// Anything else completes to nothing rather than falling back to filenames,
 /// which are almost never what you want at this prompt.
-private func kesselAttemptedCompletion(
+private func voiceAgentAttemptedCompletion(
     _ text: UnsafePointer<CChar>?, _ start: Int32, _ end: Int32
 ) -> UnsafeMutablePointer<UnsafeMutablePointer<CChar>?>? {
     // Suppress libedit's filename-completion fallback in both branches below.
     rl_attempted_completion_over = 1
     guard start == 0, let text, text.pointee == CChar(UInt8(ascii: "/")) else { return nil }
-    return rl_completion_matches(text, kesselCompletionGenerator)
+    return rl_completion_matches(text, voiceAgentCompletionGenerator)
 }

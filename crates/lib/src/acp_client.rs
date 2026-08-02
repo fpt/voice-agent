@@ -1,14 +1,14 @@
 //! ACP client: drive a whole-turn agent backend over line-delimited JSON-RPC.
 //!
-//! kessel spawns a backend that speaks the codex-app-server subset — `gallium
+//! voice-agent spawns a backend that speaks the codex-app-server subset — `gallium
 //! app-server` (the default) or `codex app-server` — and drives it a turn at a
-//! time, while serving its own local tools (the VM's `vm_*`, screen `capture`)
-//! back to that backend as the protocol's `dynamicTools`.
+//! time, while serving its own local tools (screen `capture`, the situation
+//! reader) back to that backend as the protocol's `dynamicTools`.
 //!
 //! Transport is shared with the server: [`crate::appserver::rpc`] is symmetric
 //! (it answers inbound requests, delivers inbound responses to our outbound
 //! requests, and dispatches inbound requests on their own threads), so the same
-//! `Connection` + `serve` drive either direction. Here kessel *sends*
+//! `Connection` + `serve` drive either direction. Here voice-agent *sends*
 //! `initialize` / `thread/start` / `turn/start` and *handles* the backend's
 //! `item/tool/call` and approval requests.
 
@@ -23,8 +23,8 @@ use serde_json::{json, Value};
 use crate::appserver::rpc::{serve, Connection, HandlerResult, RequestHandler, RpcFault};
 use crate::AgentError;
 
-/// A tool the client serves back to the backend agent (e.g. `vm_run`, a screen
-/// capture). The backend's model calls it; the request arrives here as an
+/// A tool the client serves back to the backend agent (e.g. a screen capture,
+/// the situation reader). The backend's model calls it; the request arrives here as an
 /// `item/tool/call` and is executed against local, resident state.
 pub trait ClientTool: Send + Sync {
     fn name(&self) -> &str;
@@ -36,7 +36,7 @@ pub trait ClientTool: Send + Sync {
     fn call(&self, args: Value) -> Result<String, String>;
 }
 
-/// Serve an existing [`ToolHandler`] (the VM's `vm_*`, `capture`, …) back to the
+/// Serve an existing [`ToolHandler`] (`capture`, `read_situation_messages`, …) back to the
 /// backend as a [`ClientTool`], unchanged. The tool runs in-process against its
 /// resident state; only `ToolResult.text` crosses the wire (images are dropped —
 /// the app-server tool-call response carries text only for now).
@@ -487,7 +487,7 @@ mod tests {
             _params: Value,
         ) -> HandlerResult {
             match method {
-                "initialize" => Ok(json!({ "userAgent": "kessel-test/0.1.0" })),
+                "initialize" => Ok(json!({ "userAgent": "voice-agent-test/0.1.0" })),
                 "thread/start" => Ok(json!({ "threadId": "t1" })),
                 "turn/start" => {
                     // Reentrantly call the client's `ping` tool mid-turn — the
@@ -557,8 +557,8 @@ mod tests {
         // driving calls on a thread and fail if they don't finish promptly.
         let (done_tx, done_rx) = unbounded::<(String, bool)>();
         std::thread::spawn(move || {
-            let ua = client.initialize("kessel-test").expect("initialize");
-            assert!(ua.contains("kessel"), "userAgent: {ua}");
+            let ua = client.initialize("voice-agent-test").expect("initialize");
+            assert!(ua.contains("voice-agent"), "userAgent: {ua}");
             client
                 .start_thread(None, None, None, Some("never"), None)
                 .expect("thread/start");
@@ -588,13 +588,13 @@ mod tests {
             _params: Value,
         ) -> HandlerResult {
             match method {
-                "initialize" => Ok(json!({ "userAgent": "kessel-test/0.1.0" })),
+                "initialize" => Ok(json!({ "userAgent": "voice-agent-test/0.1.0" })),
                 "thread/start" => Ok(json!({ "threadId": "t1" })),
                 "turn/start" => {
                     let resp = conn
                         .request(
                             "item/fileChange/requestApproval",
-                            json!({ "reason": "write file 'game.lua'" }),
+                            json!({ "reason": "write file 'notes.md'" }),
                         )
                         .expect("approval round-trips");
                     *self.seen_decision.lock() = resp
@@ -659,11 +659,11 @@ mod tests {
 
         let (done_tx, done_rx) = unbounded::<()>();
         std::thread::spawn(move || {
-            client.initialize("kessel-test").expect("initialize");
+            client.initialize("voice-agent-test").expect("initialize");
             client
                 .start_thread(None, None, None, Some("untrusted"), None)
                 .expect("thread/start");
-            client.run_turn("improve the game").expect("run_turn");
+            client.run_turn("tidy the notes").expect("run_turn");
             let _ = done_tx.send(());
         });
 
@@ -676,7 +676,7 @@ mod tests {
             asked,
             Some((
                 "file change".to_string(),
-                "write file 'game.lua'".to_string()
+                "write file 'notes.md'".to_string()
             )),
             "approver saw the action + target"
         );
@@ -702,18 +702,17 @@ mod tests {
         assert!(out.contains("weird"), "fell back to JSON: {out}");
     }
 
-    /// The VM's real `vm_*` tools serve verbatim through the adapter — no rewrite.
+    /// A real resident tool serves verbatim through the adapter — no rewrite.
     #[test]
-    fn wraps_a_vm_tool_as_a_client_tool() {
-        let reset = crate::vm::tools::vm_tool_handlers()
-            .into_iter()
-            .find(|h| h.name() == "vm_reset")
-            .expect("vm_reset present");
-        let tool = HandlerClientTool(reset);
+    fn wraps_a_resident_tool_as_a_client_tool() {
+        let situation = std::sync::Arc::new(crate::situation::SituationMessages::default());
+        let handler: Box<dyn crate::tool::ToolHandler> =
+            Box::new(crate::situation::ReadSituationMessagesTool::new(situation));
+        let tool = HandlerClientTool(handler);
 
-        assert_eq!(tool.name(), "vm_reset");
+        assert_eq!(tool.name(), "read_situation_messages");
         assert_eq!(tool.input_schema()["type"], "object");
-        let out = tool.call(json!({})).expect("vm_reset runs");
-        assert!(!out.is_empty(), "vm_reset should report something");
+        let out = tool.call(json!({})).expect("read_situation_messages runs");
+        assert!(!out.is_empty(), "the tool should report something");
     }
 }

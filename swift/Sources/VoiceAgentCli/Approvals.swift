@@ -2,7 +2,7 @@ import Foundation
 import AgentBridge
 
 /// Answers the backend's mutation-approval requests (file writes, shell
-/// commands). Kessel passes one of these to `agentNew`; without it the backend
+/// commands). voice-agent passes one of these to `agentNew`; without it the backend
 /// is told to run autonomously and edits files with no gate — which is the bug
 /// this fixes.
 ///

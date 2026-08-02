@@ -1,13 +1,13 @@
 # Gallium / local backend (default)
 #
-# kessel is an ACP client: it spawns a backend agent and drives it a turn at a
+# voice-agent is an ACP client: it spawns a backend agent and drives it a turn at a
 # time. This is the default backend — `gallium`, the standalone pure-Rust agent
 # (from ../rs-gallium) with the native candle + llama.cpp local engines. It must
-# be on PATH (override the program with `KESSEL_ACP_BACKEND`). The `llm:` fields
+# be on PATH (override the program with `VOICE_AGENT_ACP_BACKEND`). The `llm:` fields
 # below are forwarded to it as environment; the backend runs the ReAct loop,
 # tools, and MCP.
 #
-#   kessel --config configs/gallium.yaml        # gallium on PATH runs the model
+#   voice-agent --config configs/gallium.yaml        # gallium on PATH runs the model
 
 llm:
   modelPath: "hf:unsloth/Qwen3.5-9B-GGUF/Qwen3.5-9B-Q4_K_M.gguf"  # forwarded as MODEL_PATH

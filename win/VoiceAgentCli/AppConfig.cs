@@ -1,8 +1,8 @@
 using YamlDotNet.Serialization;
 
-namespace KesselCli;
+namespace VoiceAgentCli;
 
-/// Mirror of the kessel-cli YAML config (configs/*.yaml). Only the fields the
+/// Mirror of the voice-agent-cli YAML config (configs/*.yaml). Only the fields the
 /// Windows CLI needs are mapped; unknown keys are ignored.
 public sealed class AppConfig
 {
@@ -91,11 +91,11 @@ public sealed class AppConfig
         public string? Url { get; set; }
     }
 
-    /// The default user config: ~/.cache/kessel/config.yml.
+    /// The default user config: ~/.cache/voice-agent/config.yml.
     public static string UserConfigPath()
     {
         var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
-        return Path.Combine(home, ".cache", "kessel", "config.yml");
+        return Path.Combine(home, ".cache", "voice-agent", "config.yml");
     }
 
     /// Load config from an explicit path, or the first existing default candidate.
@@ -106,7 +106,7 @@ public sealed class AppConfig
         var candidates = new[]
         {
             explicitPath,
-            Environment.GetEnvironmentVariable("KESSEL_CONFIG"),
+            Environment.GetEnvironmentVariable("VOICE_AGENT_CONFIG"),
             userCfg,
             Path.ChangeExtension(userCfg, ".yaml"),    // accept .yaml too
             Path.Combine(Directory.GetCurrentDirectory(), "configs", "gallium.yaml"),
@@ -143,12 +143,12 @@ public sealed class AppConfig
             .Build()
             .Deserialize<AppConfig>(yaml) ?? new AppConfig();
 
-    /// Starter config written to ~/.cache/kessel/config.yml on first run.
+    /// Starter config written to ~/.cache/voice-agent/config.yml on first run.
     private const string DefaultConfigYaml =
         """
-        # Kessel configuration (~/.cache/kessel/config.yml)
+        # voice-agent configuration (~/.cache/voice-agent/config.yml)
         # API key: fill apiKey below, set OPENAI_API_KEY in the environment, or put
-        # it in a local .env file (project dir, the exe's dir, or ~/.cache/kessel/.env).
+        # it in a local .env file (project dir, the exe's dir, or ~/.cache/voice-agent/.env).
 
         llm:
           baseURL: "https://api.openai.com/v1"

@@ -1,6 +1,6 @@
 //! LLM data types shared across the crate (conversation messages, tool
 //! definitions, token usage). The in-process provider layer was removed when
-//! kessel became an ACP client; inference now lives in the backend agent.
+//! voice-agent became an ACP client; inference now lives in the backend agent.
 
 use serde::{Deserialize, Serialize};
 

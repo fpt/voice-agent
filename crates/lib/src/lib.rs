@@ -9,10 +9,6 @@ pub mod situation;
 pub mod skill;
 mod state_updater;
 pub mod tool;
-/// Tiny fantasy-console VM for the model's write→run→observe→debug loop. Its
-/// `vm_*` tools are served to the backend agent as ACP client tools (the VM
-/// stays resident here; the model drives it over the wire).
-pub mod vm;
 
 use parking_lot::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -25,7 +21,6 @@ pub use capture::CaptureRequest;
 pub use llm::{ChatMessage, ChatRole, TokenUsage};
 pub use memory::ConversationMemory;
 pub use state_updater::{BackchannelDetector, RuleBasedBackchannelDetector};
-pub use vm::player::VmPlayer;
 
 // UniFFI generated code
 uniffi::include_scaffolding!("agent");
@@ -126,12 +121,12 @@ pub enum AgentError {
 // Backend process wiring
 // ============================================================================
 
-/// The backend agent command to spawn. `KESSEL_ACP_BACKEND` overrides it (may be
+/// The backend agent command to spawn. `VOICE_AGENT_ACP_BACKEND` overrides it (may be
 /// `"prog arg1 arg2"`); default is `gallium` on `PATH` (the rs-gallium
 /// app-server binary). The `app-server` argument is appended by
 /// [`acp_client::AcpClient::spawn`].
 fn backend_command() -> (String, Vec<String>) {
-    let spec = std::env::var("KESSEL_ACP_BACKEND").unwrap_or_else(|_| "gallium".to_string());
+    let spec = std::env::var("VOICE_AGENT_ACP_BACKEND").unwrap_or_else(|_| "gallium".to_string());
     let mut parts = spec.split_whitespace();
     let program = parts.next().unwrap_or("gallium").to_string();
     let args: Vec<String> = parts.map(String::from).collect();
@@ -139,7 +134,7 @@ fn backend_command() -> (String, Vec<String>) {
 }
 
 /// Translate `AgentConfig` into the environment the backend's `app-server` reads
-/// (the same keys `gallium-agent`/`kessel-cli` accept). Only present values are
+/// (the same keys `gallium-agent`/`voice-agent-cli` accept). Only present values are
 /// set, so the backend's own defaults still apply.
 fn backend_envs(config: &AgentConfig) -> Vec<(String, String)> {
     let mut envs = Vec::new();
@@ -207,9 +202,9 @@ impl acp_client::ClientTool for SuggestNextCheckClientTool {
 
 /// The voice-assistant agent. It no longer runs inference in-process: it spawns a
 /// backend agent (`gallium-agent app-server` by default) and drives it a turn at
-/// a time over ACP, serving the VM (`vm_*`), screen `capture`, situation, and
-/// pacing tools back to it as client tools. Goals, situation, and backchannel
-/// remain local orchestration here.
+/// a time over ACP, serving screen `capture`, situation, and pacing tools back to
+/// it as client tools. Goals, situation, and backchannel remain local
+/// orchestration here.
 pub struct Agent {
     config: AgentConfig,
     client: Arc<acp_client::AcpClient>,
@@ -295,19 +290,10 @@ pub fn agent_new(
     let capture_bridge = capture::CaptureBridge::new();
     let next_check = Arc::new(AtomicU64::new(0));
 
-    // Client tools served back to the backend: the resident VM, screen capture,
-    // the situation reader, and the ambient pacing hint. The backend keeps its
-    // own file/bash/skill tools — those run there, in the working dir we pass.
-    //
-    // Root the VM at that same working dir so `vm_write_source`/`vm_assemble`
-    // read and write the actual game file on disk. Otherwise the model writes
-    // `game.lua` with its own file tools but `vm_assemble` compiles a stale
-    // in-memory copy (or nothing) — the write→run path never lines up.
+    // Client tools served back to the backend: screen capture, the situation
+    // reader, and the ambient pacing hint. The backend keeps its own
+    // file/bash/skill tools — those run there, in the working dir we pass.
     let mut tools: Vec<Arc<dyn acp_client::ClientTool>> = Vec::new();
-    let vm_root = config.working_dir.clone().map(std::path::PathBuf::from);
-    for handler in vm::tools::vm_tool_handlers_rooted(vm_root) {
-        tools.push(Arc::new(acp_client::HandlerClientTool(handler)));
-    }
     let capture_handlers: Vec<Box<dyn tool::ToolHandler>> = vec![
         Box::new(capture::CaptureScreenTool::new(
             capture_bridge.request_tx.clone(),
@@ -353,7 +339,7 @@ pub fn agent_new(
     let envs = backend_envs(&config);
     let client = acp_client::AcpClient::spawn(&program, &args, &envs, tools, approver)?;
     let user_agent = client
-        .initialize("kessel")
+        .initialize("voice-agent")
         .map_err(|e| AgentError::ConfigError(format!("backend handshake failed: {e}")))?;
     tracing::info!("connected to backend '{}' ({})", program, user_agent);
 

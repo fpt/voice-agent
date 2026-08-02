@@ -1,4 +1,4 @@
-namespace KesselCli;
+namespace VoiceAgentCli;
 
 /// Minimal `.env` loader so API keys (e.g. OPENAI_API_KEY) can live in a local
 /// file instead of the shell environment or the config.
@@ -10,7 +10,7 @@ namespace KesselCli;
 /// file fills gaps left by a project-local one:
 ///   1. nearest `.env` walking up from the current directory
 ///   2. nearest `.env` walking up from the executable's directory (repo root in dev)
-///   3. ~/.cache/kessel/.env  (alongside the user config)
+///   3. ~/.cache/voice-agent/.env  (alongside the user config)
 internal static class DotEnv
 {
     /// Load all discovered `.env` files; returns the paths that were applied.
@@ -41,7 +41,7 @@ internal static class DotEnv
         yield return FindUp(Directory.GetCurrentDirectory());
         yield return FindUp(AppContext.BaseDirectory);
         var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
-        yield return Path.Combine(home, ".cache", "kessel", ".env");
+        yield return Path.Combine(home, ".cache", "voice-agent", ".env");
     }
 
     private static string? FindUp(string start)

@@ -3,7 +3,7 @@ using System.Runtime.Versioning;
 using System.Speech.Synthesis;
 using System.Text.RegularExpressions;
 
-namespace KesselCli;
+namespace VoiceAgentCli;
 
 /// Text-to-speech via the built-in Windows synthesizer (System.Speech).
 /// Used by listen mode to speak the agent's replies.

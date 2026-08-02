@@ -1,20 +1,19 @@
-using uniffi.kessel_core;
-using KesselCli;
+using uniffi.voice_agent_core;
+using VoiceAgentCli;
 
 // Render Unicode (Japanese, emoji, …) instead of '?'. The default console code
 // page can't represent non-ASCII; UTF-8 (no BOM) fixes both input and output.
 try { Console.OutputEncoding = new System.Text.UTF8Encoding(false); } catch { /* redirected */ }
 try { Console.InputEncoding = new System.Text.UTF8Encoding(false); } catch { /* redirected input */ }
 
-// Load a local .env (project root / exe dir / ~/.cache/kessel) so keys like
+// Load a local .env (project root / exe dir / ~/.cache/voice-agent) so keys like
 // OPENAI_API_KEY can live in a file. Real env vars are not overridden. Done
-// before config load so .env may also supply KESSEL_CONFIG.
+// before config load so .env may also supply VOICE_AGENT_CONFIG.
 foreach (var envFile in DotEnv.Load())
     Console.Error.WriteLine($"[info] Loaded environment from {envFile}");
 
 // ── Parse arguments ───────────────────────────────────────────────────────────
 string? configPath = null;
-string? playPath = null;
 for (int i = 0; i < args.Length; i++)
 {
     switch (args[i])
@@ -22,19 +21,11 @@ for (int i = 0; i < args.Length; i++)
         case "--config" when i + 1 < args.Length:
             configPath = args[++i];
             break;
-        case "--play" when i + 1 < args.Length:
-            playPath = args[++i];
-            break;
         case "--help" or "-h":
             PrintHelp();
             return 0;
     }
 }
-
-// `--play <file>`: open the fantasy-console game window and play a ROM. No
-// agent/LLM is constructed, so this needs no model or API key.
-if (playPath is not null)
-    return PlayWindow.Run(playPath);
 
 // ── Load configuration ────────────────────────────────────────────────────────
 var (cfg, resolvedConfigPath) = AppConfig.Load(configPath);
@@ -72,7 +63,7 @@ try
 {
     // No approval gate wired on Windows yet: passing null runs the backend
     // autonomously (no mutation prompts). See ReplApprover on the macOS side.
-    agent = KesselCoreMethods.AgentNew(agentConfig, null);
+    agent = VoiceAgentCoreMethods.AgentNew(agentConfig, null);
 }
 catch (Exception ex)
 {
@@ -113,7 +104,7 @@ var (modelLine, endpointLine) = string.IsNullOrEmpty(cfg.Llm.ModelPath)
 Console.WriteLine($"""
 
 ===========================================
-  Kessel - Windows CLI
+  voice-agent - Windows CLI
 ===========================================
 
 {modelLine}
@@ -314,14 +305,12 @@ CommandResult HandleCommand(string input, bool speak)
 static void PrintHelp()
 {
     Console.WriteLine("""
-    Kessel - Windows CLI
+    voice-agent - Windows CLI
 
-    Usage: kessel-cli [OPTIONS]
+    Usage: voice-agent-cli [OPTIONS]
 
     Options:
         --config PATH      Path to configuration file (default: configs/gallium.yaml)
-        --play FILE        Open the fantasy-console game window and play a ROM
-                           (.lua or .asm); no model/API key needed
         --help, -h         Show this help message
 
     Modes (interactive only): Shift+Tab cycles text ⇄ listen.

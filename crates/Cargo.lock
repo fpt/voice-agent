@@ -356,25 +356,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8f42a60cbdf9a97f5d2305f08a87dc4e09308d1276d28c869c684d7777685682"
 
 [[package]]
-name = "kessel-core"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "crossbeam",
- "glob",
- "parking_lot",
- "regex",
- "serde",
- "serde_json",
- "tempfile",
- "thiserror",
- "tracing",
- "tracing-subscriber",
- "uniffi",
- "uniffi_bindgen",
-]
-
-[[package]]
 name = "lazy_static"
 version = "1.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -994,6 +975,25 @@ name = "valuable"
 version = "0.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ba73ea9cf16a25df0c8caa16c51acb937d5712a8429db78a3ee29d5dcacd3a65"
+
+[[package]]
+name = "voice-agent-core"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "crossbeam",
+ "glob",
+ "parking_lot",
+ "regex",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror",
+ "tracing",
+ "tracing-subscriber",
+ "uniffi",
+ "uniffi_bindgen",
+]
 
 [[package]]
 name = "weedle2"

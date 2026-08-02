@@ -1,9 +1,9 @@
-# Kessel
+# voice-agent
 
-A voice-and-text assistant and fantasy-console VM that runs on **macOS and
-Windows**. Kessel does **no LLM inference of its own** — it is an **ACP client**:
-it spawns a backend agent and drives it a turn at a time over JSON-RPC, serving
-its resident tools (the VM, screen capture) back to the backend.
+A voice-and-text assistant that runs on **macOS and Windows**. voice-agent does
+**no LLM inference of its own** — it is an **ACP client**: it spawns a backend
+agent and drives it a turn at a time over JSON-RPC, serving its resident tools
+(screen capture, the situation feed) back to the backend.
 
 The frontend is native per platform; the agent backend is a separate binary
 (`gallium` by default) found on PATH.
@@ -12,17 +12,16 @@ The frontend is native per platform; the agent backend is a separate binary
 
 | | Frontend | Speech |
 |---|---|---|
-| **macOS 26+** | Swift — `kessel` | Apple SpeechTranscriber (STT) + AVSpeechSynthesizer (TTS) |
-| **Windows** | C# / .NET 8 — `kessel.exe` | `System.Speech` recognizer + synthesizer |
+| **macOS 26+** | Swift — `voice-agent` | Apple SpeechTranscriber (STT) + AVSpeechSynthesizer (TTS) |
+| **Windows** | C# / .NET 8 — `voice-agent.exe` | `System.Speech` recognizer + synthesizer |
 
 The backend is swappable: `gallium` and `codex` both speak the same
-codex-app-server JSON-RPC subset. Select it with `KESSEL_ACP_BACKEND` (default
+codex-app-server JSON-RPC subset. Select it with `VOICE_AGENT_ACP_BACKEND` (default
 `gallium`).
 
 ## Features
 
 - **Backend-agnostic ACP client**: spawns and drives whatever app-server it's pointed at; no local inference or agent loop of its own
-- **Fantasy-console VM**: a tiny stack VM + a statically-typed Lua-ish front-end (`luax`); served to the backend as `vm_*` client tools so the model can write → assemble → run → observe → debug games. Playable standalone via `kessel --play` ([details](docs/VM.md))
 - **Screen awareness**: window capture / OCR client tools + an ambient situation feed
 - **MCP**: `mcpServers` are forwarded to the backend, which connects them ([details](#mcp))
 - **Voice I/O**: continuous conversation, half-duplex (mic muted during playback to prevent echo)
@@ -32,7 +31,7 @@ codex-app-server JSON-RPC subset. Select it with `KESSEL_ACP_BACKEND` (default
 
 **Common**
 - Rust toolchain
-- A backend on PATH — build/install `gallium` from [`../rs-gallium`](https://github.com/fpt/rs-gallium), or point `KESSEL_ACP_BACKEND` at `codex`
+- A backend on PATH — build/install `gallium` from [`../rs-gallium`](https://github.com/fpt/rs-gallium), or point `VOICE_AGENT_ACP_BACKEND` at `codex`
 
 **macOS**
 - macOS 26+ (Apple SpeechTranscriber)
@@ -46,31 +45,31 @@ codex-app-server JSON-RPC subset. Select it with `KESSEL_ACP_BACKEND` (default
 ### macOS
 
 ```bash
-# Build the Rust core + Swift app and install `kessel` to ~/bin
+# Build the Rust core + Swift app and install `voice-agent` to ~/bin
 make install
 
 # Run against the local gallium backend (auto-downloads the model on first run)
-kessel --config configs/gallium.yaml
+voice-agent --config configs/gallium.yaml
 
 # ...or a cloud backend
 export OPENAI_API_KEY=sk-...
-KESSEL_ACP_BACKEND=codex kessel --config configs/codex.yaml
+VOICE_AGENT_ACP_BACKEND=codex voice-agent --config configs/codex.yaml
 ```
 
-`make install` installs a single binary, **`kessel`** (the voice app). The agent
+`make install` installs a single binary, **`voice-agent`** (the voice app). The agent
 backend (`gallium`) is installed separately from its own repo and found on PATH.
 
 ### Windows
 
 ```bash
-# Build the Rust cdylib (kessel_core.dll), then the C# frontend
+# Build the Rust cdylib (voice_agent_core.dll), then the C# frontend
 make build-win
 
 # Generate the C# bindings once (see CLAUDE.md for the one-time install)
 bash scripts/gen_uniffi_cs.sh
 
 # Run
-win/KesselCli/bin/Release/net8.0-windows/kessel.exe --config configs/gallium.yaml
+win/VoiceAgentCli/bin/Release/net8.0-windows/voice-agent.exe --config configs/gallium.yaml
 ```
 
 The Windows REPL has two modes, toggled with **Shift+Tab**: `text` (type → printed
@@ -84,7 +83,7 @@ are shipped, one per backend flavor:
 | config | backend | notes |
 |--------|---------|-------|
 | `gallium.yaml` | `gallium` (default) | local model via the standalone pure-Rust agent |
-| `codex.yaml` | `codex` (cloud) | set `KESSEL_ACP_BACKEND=codex` + `OPENAI_API_KEY` |
+| `codex.yaml` | `codex` (cloud) | set `VOICE_AGENT_ACP_BACKEND=codex` + `OPENAI_API_KEY` |
 
 ```yaml
 llm:                                  # forwarded to the backend as environment
@@ -109,12 +108,12 @@ tts: { enabled: true, voice: "com.apple.voice.enhanced.en-US.Zoe" }
 stt: { enabled: true, locale: "en-US" }
 ```
 
-The `llm:` block is **forwarded to the backend** — kessel does not interpret it.
-Backend selection is via `KESSEL_ACP_BACKEND` (env), not the config.
+The `llm:` block is **forwarded to the backend** — voice-agent does not interpret it.
+Backend selection is via `VOICE_AGENT_ACP_BACKEND` (env), not the config.
 
 ## MCP
 
-Kessel forwards the config's `mcpServers` to the backend over `thread/start`; the
+voice-agent forwards the config's `mcpServers` to the backend over `thread/start`; the
 **backend** connects them (stdio via `command`/`args`, or Streamable HTTP via
 `url`) and exposes their tools to the model. A server that fails to connect is
 logged and skipped.
@@ -128,14 +127,14 @@ mcpServers:
 
 ## ACP client
 
-`kessel` spawns the backend (`gallium app-server` by default) and drives it as a
+`voice-agent` spawns the backend (`gallium app-server` by default) and drives it as a
 **whole-turn** ACP client over line-delimited JSON-RPC on stdio — it sends
 `initialize`/`thread/start`/`turn/start` and handles the backend's inbound
 `item/tool/call` + approval requests. The backend runs its own ReAct loop, tools,
-and MCP connections inside each turn; kessel serves the VM (`vm_*`), screen
-capture, and situation reader back as `dynamicTools`.
+and MCP connections inside each turn; voice-agent serves the screen capture and
+situation reader back as `dynamicTools`.
 
-Override the backend program with `KESSEL_ACP_BACKEND` (default `gallium`; may be
+Override the backend program with `VOICE_AGENT_ACP_BACKEND` (default `gallium`; may be
 `"prog arg1 arg2"`). See [CLAUDE.md](CLAUDE.md) and [docs/REFACTOR.md](docs/REFACTOR.md).
 
 ## Skills
@@ -154,7 +153,7 @@ Prompt body injected as system context...
 
 ## Commands
 
-**macOS (`kessel`)**
+**macOS (`voice-agent`)**
 
 | Command | Description |
 |---------|-------------|
@@ -168,7 +167,7 @@ Prompt body injected as system context...
 | `/help` | Show help |
 | `/quit` | Exit |
 
-**Windows (`kessel.exe`)**
+**Windows (`voice-agent.exe`)**
 
 | Command | Description |
 |---------|-------------|
@@ -188,10 +187,10 @@ Windows:  Mic -> System.Speech     -> C# CLI   ──┼─> UniFFI -> Rust ACP 
                                                  │              v
                                                  │       gallium app-server
                                                  │       (ReAct + LLM + tools + MCP)
-                                                 └───<── item/tool/call (vm_*, capture)
+                                                 └───<── item/tool/call (capture, situation)
 ```
 
-- **Rust** (`crates/lib`, `kessel_core`): ACP client, the VM, client tools, and local orchestration (goals, situation, backchannel). No inference.
+- **Rust** (`crates/lib`, `voice_agent_core`): ACP client, client tools, and local orchestration (goals, situation, backchannel). No inference.
 - **Swift** (`swift/`): macOS voice app, audio pipeline, TTS.
 - **C#** (`win/`): Windows frontend.
 - **UniFFI**: generates the Swift and C# bindings to the Rust core.
