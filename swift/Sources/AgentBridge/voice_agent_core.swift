@@ -542,8 +542,6 @@ public protocol AgentProtocol : AnyObject {
     
     func goalStatus()  -> GoalStatus?
     
-    func observe(prompt: String) throws  -> AgentResponse
-    
     func pushSituationMessage(text: String, source: String, sessionId: String) 
     
     func reset() 
@@ -647,14 +645,6 @@ open func getConversationHistory() -> String {
 open func goalStatus() -> GoalStatus? {
     return try!  FfiConverterOptionTypeGoalStatus.lift(try! rustCall() {
     uniffi_voice_agent_core_fn_method_agent_goal_status(self.uniffiClonePointer(),$0
-    )
-})
-}
-    
-open func observe(prompt: String)throws  -> AgentResponse {
-    return try  FfiConverterTypeAgentResponse.lift(try rustCallWithError(FfiConverterTypeAgentError.lift) {
-    uniffi_voice_agent_core_fn_method_agent_observe(self.uniffiClonePointer(),
-        FfiConverterString.lower(prompt),$0
     )
 })
 }
@@ -2016,9 +2006,6 @@ private var initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_voice_agent_core_checksum_method_agent_goal_status() != 57962) {
-        return InitializationResult.apiChecksumMismatch
-    }
-    if (uniffi_voice_agent_core_checksum_method_agent_observe() != 29087) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_voice_agent_core_checksum_method_agent_push_situation_message() != 40141) {

@@ -147,12 +147,6 @@ public class AgentSession: @unchecked Sendable {
         try agent.step(userInput: text)
     }
 
-    /// Run a non-persisting, read-only observation turn (ambient `/loop`).
-    /// Does not touch conversation memory. The backend owns its own tool set, so
-    /// there is no per-turn tool filtering to request.
-    public func observe(_ prompt: String) throws -> AgentResponse {
-        try agent.observe(prompt: prompt)
-    }
 
     /// Reset conversation history.
     public func reset() {
