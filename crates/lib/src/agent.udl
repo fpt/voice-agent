@@ -37,8 +37,8 @@ dictionary McpServerConfig {
 
 dictionary AgentConfig {
     string? model_path;
-    string base_url;
-    string model;
+    string? base_url;
+    string? model;
     string? api_key;
     f32? temperature;
     u32 max_tokens;

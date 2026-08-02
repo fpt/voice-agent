@@ -35,8 +35,11 @@ pub struct McpServerConfig {
 /// Configuration for the agent
 pub struct AgentConfig {
     pub model_path: Option<String>,
-    pub base_url: String,
-    pub model: String,
+    /// Cloud endpoint, forwarded as `LLM_BASE_URL`. `None` (or empty) leaves the
+    /// backend's own default in place — a local model needs neither.
+    pub base_url: Option<String>,
+    /// Model name, forwarded as `LLM_MODEL`. `None` leaves the backend's default.
+    pub model: Option<String>,
     pub api_key: Option<String>,
     pub temperature: Option<f32>,
     pub max_tokens: u32,
@@ -57,8 +60,8 @@ impl Default for AgentConfig {
     fn default() -> Self {
         Self {
             model_path: None,
-            base_url: "https://api.openai.com/v1".to_string(),
-            model: "gpt-5.6-luna".to_string(),
+            base_url: None,
+            model: None,
             api_key: None,
             temperature: Some(0.7),
             max_tokens: 2048,
@@ -83,8 +86,10 @@ pub struct AgentResponse {
     pub output_tokens: u64,
     pub total_tokens: u64,
     pub context_percent: f32,
-    /// Self-paced cadence hint from `observe()` (seconds until next check), set
-    /// when the agent calls the `suggest_next_check` tool. `None` for `step()`.
+    /// Self-paced cadence hint (seconds until the next check), set when the model
+    /// calls the `suggest_next_check` client tool during a turn. `None` when it
+    /// did not — which is every ordinary turn, since only the ambient `/loop`
+    /// prompt asks for a cadence.
     pub suggested_next_check_seconds: Option<u32>,
 }
 
@@ -163,23 +168,42 @@ fn resolve_backend(
 fn backend_envs(config: &AgentConfig) -> Vec<(String, String)> {
     let mut envs = Vec::new();
     let mut set = |k: &str, v: String| envs.push((k.to_string(), v));
-    if let Some(p) = &config.model_path {
-        set("MODEL_PATH", p.clone());
+
+    // Absent and blank both mean "not configured". Forwarding `LLM_BASE_URL=""`
+    // or `OPENAI_API_KEY=""` would otherwise look to the backend like a
+    // deliberately empty endpoint or credential — and an empty key can shadow
+    // the backend's own credential fallback, which is exactly what a codex user
+    // signed in via `codex login` relies on. Both backends happen to defend
+    // against blanks, but this is what the "only present values" contract above
+    // actually requires.
+    let present = |v: &Option<String>| {
+        v.as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_string)
+    };
+
+    if let Some(p) = present(&config.model_path) {
+        set("MODEL_PATH", p);
     }
-    if let Some(k) = &config.api_key {
-        set("OPENAI_API_KEY", k.clone());
+    if let Some(k) = present(&config.api_key) {
+        set("OPENAI_API_KEY", k);
     }
-    set("LLM_BASE_URL", config.base_url.clone());
-    set("LLM_MODEL", config.model.clone());
+    if let Some(u) = present(&config.base_url) {
+        set("LLM_BASE_URL", u);
+    }
+    if let Some(m) = present(&config.model) {
+        set("LLM_MODEL", m);
+    }
     set("MAX_TOKENS", config.max_tokens.to_string());
     if let Some(t) = config.temperature {
         set("LLM_TEMPERATURE", t.to_string());
     }
-    if let Some(r) = &config.reasoning_effort {
-        set("REASONING_EFFORT", r.clone());
+    if let Some(r) = present(&config.reasoning_effort) {
+        set("REASONING_EFFORT", r);
     }
-    if let Some(e) = &config.inference_engine {
-        set("INFERENCE_ENGINE", e.clone());
+    if let Some(e) = present(&config.inference_engine) {
+        set("INFERENCE_ENGINE", e);
     }
     envs
 }
@@ -667,6 +691,64 @@ mod tests {
         let (program, _, source) = resolve_backend(Some(""), Some(""));
         assert_eq!(program, "gallium");
         assert_eq!(source, "default");
+    }
+
+    /// Absent *and* blank `llm:` values must not be forwarded. A codex user
+    /// signed in with `codex login` sets no baseURL/apiKey at all, and an empty
+    /// `LLM_BASE_URL` or `OPENAI_API_KEY` would read to a backend as a
+    /// deliberately blank endpoint or credential rather than "not configured" —
+    /// an empty key can shadow the backend's own credential fallback.
+    #[test]
+    fn absent_and_empty_llm_values_are_not_forwarded() {
+        // A blank string is the interesting case, not just `None`: an empty
+        // `OPENAI_API_KEY` can shadow the backend's own credential fallback.
+        let config = AgentConfig {
+            base_url: Some(String::new()),
+            model: Some("   ".to_string()),
+            api_key: Some("".to_string()),
+            model_path: Some("  ".to_string()),
+            reasoning_effort: Some(String::new()),
+            inference_engine: Some("\t".to_string()),
+            ..Default::default()
+        };
+        let envs = backend_envs(&config);
+        let keys: Vec<&str> = envs.iter().map(|(k, _)| k.as_str()).collect();
+        for key in [
+            "LLM_BASE_URL",
+            "LLM_MODEL",
+            "OPENAI_API_KEY",
+            "MODEL_PATH",
+            "REASONING_EFFORT",
+            "INFERENCE_ENGINE",
+        ] {
+            assert!(!keys.contains(&key), "{key} was forwarded blank: {keys:?}");
+        }
+
+        // Absent behaves the same way.
+        let envs = backend_envs(&AgentConfig::default());
+        let keys: Vec<&str> = envs.iter().map(|(k, _)| k.as_str()).collect();
+        assert!(!keys.contains(&"LLM_BASE_URL"), "got {keys:?}");
+        assert!(!keys.contains(&"OPENAI_API_KEY"), "got {keys:?}");
+    }
+
+    /// Values that *are* set still reach the backend.
+    #[test]
+    fn present_llm_values_are_forwarded() {
+        let config = AgentConfig {
+            base_url: Some("https://example.test/v1".to_string()),
+            model: Some("some-model".to_string()),
+            api_key: Some("sk-test".to_string()),
+            ..Default::default()
+        };
+        let envs = backend_envs(&config);
+        let get = |k: &str| {
+            envs.iter()
+                .find(|(key, _)| key == k)
+                .map(|(_, v)| v.as_str())
+        };
+        assert_eq!(get("LLM_BASE_URL"), Some("https://example.test/v1"));
+        assert_eq!(get("LLM_MODEL"), Some("some-model"));
+        assert_eq!(get("OPENAI_API_KEY"), Some("sk-test"));
     }
 
     /// Either source may carry arguments.

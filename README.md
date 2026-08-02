@@ -52,8 +52,8 @@ make install
 # Run against the local gallium backend (auto-downloads the model on first run)
 voice-agent --config configs/gallium.yaml
 
-# ...or a cloud backend (codex.yaml declares `backend: "codex"`)
-export OPENAI_API_KEY=sk-...
+# ...or a cloud backend (codex.yaml declares `backend: "codex"`).
+# Sign in to codex once first: `codex login`
 voice-agent --config configs/codex.yaml
 ```
 
@@ -84,14 +84,14 @@ are shipped, one per backend flavor:
 | config | backend | notes |
 |--------|---------|-------|
 | `gallium.yaml` | `gallium` (default) | local model via the standalone pure-Rust agent |
-| `codex.yaml` | `codex` (cloud) | declares `backend: "codex"`; needs `OPENAI_API_KEY` |
+| `codex.yaml` | `codex` (cloud) | declares `backend: "codex"`; codex uses its own `codex login` credentials |
 
 ```yaml
 backend: "gallium"                    # backend program on PATH: gallium | codex | "prog args"
 
 llm:                                  # forwarded to the backend as environment
   modelPath: "hf:unsloth/gemma-4-E4B-it-GGUF/gemma-4-E4B-it-Q4_K_M.gguf"  # local (MODEL_PATH)
-  baseURL: "https://api.openai.com/v1"                            # cloud (LLM_BASE_URL)
+  baseURL: "https://api.openai.com/v1"                            # optional, cloud (LLM_BASE_URL)
   model: "gpt-5.6-luna"
   inferenceEngine: "llamacpp"         # backend's local engine: llamacpp | gallium
   temperature: 0.7
