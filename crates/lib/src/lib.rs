@@ -35,8 +35,11 @@ pub struct McpServerConfig {
 /// Configuration for the agent
 pub struct AgentConfig {
     pub model_path: Option<String>,
-    pub base_url: String,
-    pub model: String,
+    /// Cloud endpoint, forwarded as `LLM_BASE_URL`. `None` (or empty) leaves the
+    /// backend's own default in place — a local model needs neither.
+    pub base_url: Option<String>,
+    /// Model name, forwarded as `LLM_MODEL`. `None` leaves the backend's default.
+    pub model: Option<String>,
     pub api_key: Option<String>,
     pub temperature: Option<f32>,
     pub max_tokens: u32,
@@ -57,8 +60,8 @@ impl Default for AgentConfig {
     fn default() -> Self {
         Self {
             model_path: None,
-            base_url: "https://api.openai.com/v1".to_string(),
-            model: "gpt-5.6-luna".to_string(),
+            base_url: None,
+            model: None,
             api_key: None,
             temperature: Some(0.7),
             max_tokens: 2048,
@@ -169,8 +172,16 @@ fn backend_envs(config: &AgentConfig) -> Vec<(String, String)> {
     if let Some(k) = &config.api_key {
         set("OPENAI_API_KEY", k.clone());
     }
-    set("LLM_BASE_URL", config.base_url.clone());
-    set("LLM_MODEL", config.model.clone());
+    // Absent and empty both mean "not configured": forwarding `LLM_BASE_URL=""`
+    // would otherwise look to the backend like a deliberately empty endpoint.
+    // Both backends happen to defend against that, but this is what the
+    // "only present values" contract above actually requires.
+    if let Some(u) = config.base_url.as_deref().filter(|s| !s.trim().is_empty()) {
+        set("LLM_BASE_URL", u.to_string());
+    }
+    if let Some(m) = config.model.as_deref().filter(|s| !s.trim().is_empty()) {
+        set("LLM_MODEL", m.to_string());
+    }
     set("MAX_TOKENS", config.max_tokens.to_string());
     if let Some(t) = config.temperature {
         set("LLM_TEMPERATURE", t.to_string());
@@ -667,6 +678,45 @@ mod tests {
         let (program, _, source) = resolve_backend(Some(""), Some(""));
         assert_eq!(program, "gallium");
         assert_eq!(source, "default");
+    }
+
+    /// Absent or empty `llm:` values must not be forwarded. A codex user signed
+    /// in with `codex login` sets no baseURL/apiKey at all, and an empty
+    /// `LLM_BASE_URL` would read to a backend as a deliberately blank endpoint
+    /// rather than "not configured".
+    #[test]
+    fn absent_and_empty_llm_values_are_not_forwarded() {
+        let config = AgentConfig {
+            base_url: None,
+            model: Some("   ".to_string()),
+            api_key: None,
+            ..Default::default()
+        };
+        let envs = backend_envs(&config);
+        let keys: Vec<&str> = envs.iter().map(|(k, _)| k.as_str()).collect();
+        assert!(!keys.contains(&"LLM_BASE_URL"), "got {keys:?}");
+        assert!(!keys.contains(&"LLM_MODEL"), "got {keys:?}");
+        assert!(!keys.contains(&"OPENAI_API_KEY"), "got {keys:?}");
+    }
+
+    /// Values that *are* set still reach the backend.
+    #[test]
+    fn present_llm_values_are_forwarded() {
+        let config = AgentConfig {
+            base_url: Some("https://example.test/v1".to_string()),
+            model: Some("some-model".to_string()),
+            api_key: Some("sk-test".to_string()),
+            ..Default::default()
+        };
+        let envs = backend_envs(&config);
+        let get = |k: &str| {
+            envs.iter()
+                .find(|(key, _)| key == k)
+                .map(|(_, v)| v.as_str())
+        };
+        assert_eq!(get("LLM_BASE_URL"), Some("https://example.test/v1"));
+        assert_eq!(get("LLM_MODEL"), Some("some-model"));
+        assert_eq!(get("OPENAI_API_KEY"), Some("sk-test"));
     }
 
     /// Either source may carry arguments.

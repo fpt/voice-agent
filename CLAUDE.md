@@ -64,7 +64,7 @@ the split (voice-agent = platform + app-server client; the agent core lives in
 
 ### Key Patterns
 
-- **voice-agent runs no inference.** `agent_new` spawns the backend (`backend_command()` — `gallium` by default, override with `VOICE_AGENT_BACKEND`), forwards model/API config as environment (`MODEL_PATH`, `OPENAI_API_KEY`, `LLM_BASE_URL`, `LLM_MODEL`, `INFERENCE_ENGINE`, …), and drives turns. `step` and `evaluate_goal` each run a backend turn; `evaluate_goal` uses a throwaway thread so it doesn't pollute history. Every user-facing turn — typed, spoken, `/loop`, or `/goal` — goes through `step` and persists, by design.
+- **voice-agent runs no inference.** `agent_new` spawns the backend (`backend_command()` — `gallium` by default, override with `VOICE_AGENT_BACKEND`), forwards model/API config as environment (`MODEL_PATH`, `OPENAI_API_KEY`, `LLM_BASE_URL`, `LLM_MODEL`, `INFERENCE_ENGINE`, …), and drives turns. **Every one of those is optional** — absent or empty values are not forwarded at all, so the backend's own defaults and its own credentials (codex signs in via `codex login`) still apply. `step` and `evaluate_goal` each run a backend turn; `evaluate_goal` uses a throwaway thread so it doesn't pollute history. Every user-facing turn — typed, spoken, `/loop`, or `/goal` — goes through `step` and persists, by design.
 - **Client tools** (`app_server_client::ClientTool`): screen `capture`, `read_situation_messages`, and `suggest_next_check` are registered as the backend's `dynamicTools`. The backend's model calls them; the request arrives as an inbound `item/tool/call` and executes against resident voice-agent state. `HandlerClientTool` adapts any `ToolHandler` verbatim.
 - Build `ChatMessage` with its helper constructors (`ChatMessage::user()`, `ChatMessage::assistant()`, `ChatMessage::system()`), not struct literals.
 - The transport (`appserver::rpc`) is **bidirectional** — inbound requests are dispatched on their own threads so a long `turn/start` can originate tool-call requests while the reader keeps running.
@@ -79,16 +79,16 @@ prompt supports the `{language}` template variable.
 | config | backend | notes |
 |--------|---------|-------|
 | `gallium.yaml` | `gallium` (default) | local model via the standalone pure-Rust agent; `modelPath` + `inferenceEngine` forwarded as env |
-| `codex.yaml` | `codex` (cloud) | declares `backend: "codex"`; needs `OPENAI_API_KEY`; `baseURL`/`model` forwarded |
+| `codex.yaml` | `codex` (cloud) | declares `backend: "codex"`; codex authenticates itself via `codex login` — no credentials are passed to it |
 
 ```yaml
 backend: "gallium"                      # backend program on PATH; VOICE_AGENT_BACKEND overrides
 
 llm:
   modelPath: "hf:unsloth/gemma-4-E4B-it-GGUF/gemma-4-E4B-it-Q4_K_M.gguf"  # forwarded as MODEL_PATH (auto-downloaded by the backend)
-  baseURL: "https://api.openai.com/v1"  # forwarded as LLM_BASE_URL (cloud)
+  baseURL: "https://api.openai.com/v1"  # optional; forwarded as LLM_BASE_URL (cloud)
   model: "gpt-5.6-luna"                 # forwarded as LLM_MODEL
-  apiKey: ""                            # or OPENAI_API_KEY env var
+  apiKey: "sk-..."                      # optional; or the OPENAI_API_KEY env var
   inferenceEngine: "llamacpp"           # forwarded as INFERENCE_ENGINE (backend's local engine: llamacpp | gallium)
   temperature: 0.7
   maxTokens: 2048
@@ -137,7 +137,7 @@ cd swift && swift build
 
 # Run (needs a backend on PATH — install `gallium` from ../rs-gallium)
 cd swift && swift run voice-agent-cli --config ../configs/gallium.yaml           # local backend
-VOICE_AGENT_BACKEND=codex OPENAI_API_KEY=sk-... \
+VOICE_AGENT_BACKEND=codex \
   swift run voice-agent-cli --config ../configs/codex.yaml --text                # cloud backend
 ```
 

@@ -3,10 +3,17 @@
 # voice-agent is an app-server client: it spawns a backend agent and drives it a
 # turn at a time. This config selects OpenAI's `codex` app-server:
 #
-#   OPENAI_API_KEY=sk-...   voice-agent --config configs/codex.yaml
+#   voice-agent --config configs/codex.yaml
 #
-# The `llm:` fields below are forwarded to that backend as environment
-# (baseURL/model/apiKey/…); the backend runs the ReAct loop, tools, and MCP.
+# **codex authenticates itself.** Sign in once with `codex login` (a ChatGPT
+# subscription, or an API key) and it uses that; voice-agent passes no
+# credentials. `apiKey` below is only read by backends that want
+# `OPENAI_API_KEY` in their environment — gallium in cloud mode does, codex
+# does not.
+#
+# The `llm:` fields are forwarded to the backend as environment; the backend
+# runs the ReAct loop, tools, and MCP. Every one of them is optional — omit a
+# field and the backend's own default applies.
 
 # The backend program on PATH. `VOICE_AGENT_BACKEND` overrides this at runtime;
 # omitting both falls back to `gallium`. Any binary speaking the same
@@ -14,9 +21,10 @@
 backend: "codex"
 
 llm:
-  baseURL: ""  # forwarded as LLM_BASE_URL
-  model: "gpt-5.6-luna"                 # forwarded as LLM_MODEL
-  apiKey: ""                            # empty → read from OPENAI_API_KEY env var
+  # baseURL / apiKey: omitted on purpose — codex uses its own `codex login`
+  # credentials and its configured endpoint. Set them only for a backend that
+  # reads LLM_BASE_URL / OPENAI_API_KEY (e.g. gallium in cloud mode).
+  # model: omitted — codex picks its configured model. Set to override.
   maxTokens: 8192
   reasoningEffort: "medium"             # low | medium | high (reasoning-capable models)
 

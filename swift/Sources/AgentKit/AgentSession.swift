@@ -57,8 +57,8 @@ public class AgentSession: @unchecked Sendable {
         }
         let agentConfig = AgentConfig(
             modelPath: modelPath,
-            baseUrl: config.llm.baseURL ?? "",
-            model: config.llm.model ?? "",
+            baseUrl: config.llm.baseURL,
+            model: config.llm.model,
             apiKey: apiKey,
             temperature: config.llm.temperature,
             maxTokens: UInt32(config.llm.maxTokens),

@@ -43,10 +43,11 @@ public sealed class AppConfig
         public string? ModelPath { get; set; }
 
         [YamlMember(Alias = "baseURL")]
-        public string BaseUrl { get; set; } = "https://api.openai.com/v1";
+        // Null/empty means "not configured" — the backend's own default applies.
+        public string? BaseUrl { get; set; }
 
         [YamlMember(Alias = "model")]
-        public string Model { get; set; } = "gpt-5.6-luna";
+        public string? Model { get; set; }
 
         [YamlMember(Alias = "apiKey")]
         public string? ApiKey { get; set; }

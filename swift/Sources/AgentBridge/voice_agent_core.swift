@@ -930,8 +930,8 @@ public func FfiConverterTypeMutationApprover_lower(_ value: MutationApprover) ->
 
 public struct AgentConfig {
     public var modelPath: String?
-    public var baseUrl: String
-    public var model: String
+    public var baseUrl: String?
+    public var model: String?
     public var apiKey: String?
     public var temperature: Float?
     public var maxTokens: UInt32
@@ -944,7 +944,7 @@ public struct AgentConfig {
 
     // Default memberwise initializers are never public by default, so we
     // declare one manually.
-    public init(modelPath: String?, baseUrl: String, model: String, apiKey: String?, temperature: Float?, maxTokens: UInt32, language: String?, workingDir: String?, reasoningEffort: String?, inferenceEngine: String?, backend: String?, mcpServers: [McpServerConfig]) {
+    public init(modelPath: String?, baseUrl: String?, model: String?, apiKey: String?, temperature: Float?, maxTokens: UInt32, language: String?, workingDir: String?, reasoningEffort: String?, inferenceEngine: String?, backend: String?, mcpServers: [McpServerConfig]) {
         self.modelPath = modelPath
         self.baseUrl = baseUrl
         self.model = model
@@ -1028,8 +1028,8 @@ public struct FfiConverterTypeAgentConfig: FfiConverterRustBuffer {
         return
             try AgentConfig(
                 modelPath: FfiConverterOptionString.read(from: &buf), 
-                baseUrl: FfiConverterString.read(from: &buf), 
-                model: FfiConverterString.read(from: &buf), 
+                baseUrl: FfiConverterOptionString.read(from: &buf), 
+                model: FfiConverterOptionString.read(from: &buf), 
                 apiKey: FfiConverterOptionString.read(from: &buf), 
                 temperature: FfiConverterOptionFloat.read(from: &buf), 
                 maxTokens: FfiConverterUInt32.read(from: &buf), 
@@ -1044,8 +1044,8 @@ public struct FfiConverterTypeAgentConfig: FfiConverterRustBuffer {
 
     public static func write(_ value: AgentConfig, into buf: inout [UInt8]) {
         FfiConverterOptionString.write(value.modelPath, into: &buf)
-        FfiConverterString.write(value.baseUrl, into: &buf)
-        FfiConverterString.write(value.model, into: &buf)
+        FfiConverterOptionString.write(value.baseUrl, into: &buf)
+        FfiConverterOptionString.write(value.model, into: &buf)
         FfiConverterOptionString.write(value.apiKey, into: &buf)
         FfiConverterOptionFloat.write(value.temperature, into: &buf)
         FfiConverterUInt32.write(value.maxTokens, into: &buf)
