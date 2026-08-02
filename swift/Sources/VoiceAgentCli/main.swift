@@ -201,7 +201,7 @@ let windowListPoller = Task { @MainActor in
     while !Task.isCancelled {
         if let list = try? await wm.listWindows() {
             let text = list.map { $0.summary }.joined(separator: "\n")
-            session.agent.pushSituationMessage(
+            session.backend.pushSituationMessage(
                 text: "[screen] Windows:\n\(text)", source: "screen", sessionId: ""
             )
         }
@@ -209,14 +209,21 @@ let windowListPoller = Task { @MainActor in
     }
 }
 
-// Capture request fulfillment (100ms polling)
-let capturePoller = Task { @MainActor in
+// Capture request fulfillment (100ms polling).
+//
+// Only runs for a backend whose tools execute out of process and so cannot
+// reach the macOS screen APIs themselves — the Rust client tools post a request
+// and this loop answers it. A backend with Swift-native tools calls
+// WindowManager/OCR/ScreenCapture directly and offers no bridge, in which case
+// there is nothing to poll. See AgentBackend.screenBridge.
+let capturePoller: Task<Void, Never>? = session.backend.screenBridge.map { screenBridge in
+    Task { @MainActor in
     var lastCapturedImage: CGImage? = nil
     var lastCaptureInfo: WindowInfo? = nil
 
     while !Task.isCancelled {
         try? await Task.sleep(for: .milliseconds(100))
-        let requests = session.agent.drainCaptureRequests()
+        let requests = screenBridge.drainCaptureRequests()
         for req in requests {
             // Window query. searchKeywords present = find_window/list_windows.
             // Empty keywords is the list_windows sentinel (list filtered windows);
@@ -249,9 +256,9 @@ let capturePoller = Task { @MainActor in
                             text = "Found \(matched.count) window(s):\n  \(lines)"
                         }
                     }
-                    session.agent.submitCaptureResult(id: req.id, imageBase64: "", metadataJson: text)
+                    screenBridge.submitCaptureResult(id: req.id, imageBase64: "", metadataJson: text)
                 } catch {
-                    session.agent.submitCaptureResult(
+                    screenBridge.submitCaptureResult(
                         id: req.id, imageBase64: "", metadataJson: "Error: \(error)"
                     )
                 }
@@ -262,7 +269,7 @@ let capturePoller = Task { @MainActor in
             if req.applyOcr == true {
                 do {
                     guard let cached = lastCapturedImage, let cachedInfo = lastCaptureInfo else {
-                        session.agent.submitCaptureResult(
+                        screenBridge.submitCaptureResult(
                             id: req.id, imageBase64: "",
                             metadataJson: "Error: no cached image. Capture a window first with capture_screen."
                         )
@@ -287,9 +294,9 @@ let capturePoller = Task { @MainActor in
                     // Grouped blocks read like a human sees the window — far more
                     // legible to the model than a flat per-line bbox list.
                     let metadata = header + "\n" + formatOCRResultsGrouped(entries)
-                    session.agent.submitCaptureResult(id: req.id, imageBase64: "", metadataJson: metadata)
+                    screenBridge.submitCaptureResult(id: req.id, imageBase64: "", metadataJson: metadata)
                 } catch {
-                    session.agent.submitCaptureResult(
+                    screenBridge.submitCaptureResult(
                         id: req.id, imageBase64: "", metadataJson: "Error: \(error)"
                     )
                 }
@@ -299,7 +306,7 @@ let capturePoller = Task { @MainActor in
             // capture_screen: capture by window_id, optional detect
             do {
                 guard let windowId = req.windowId else {
-                    session.agent.submitCaptureResult(
+                    screenBridge.submitCaptureResult(
                         id: req.id, imageBase64: "",
                         metadataJson: "Error: window_id is required. Use find_window first."
                     )
@@ -314,18 +321,19 @@ let capturePoller = Task { @MainActor in
                     let objects = try performObjectDetection(on: image)
                     let header = "Window: \(info.title ?? "?"), App: \(info.appName ?? "?")"
                     let metadata = header + "\n" + formatDetectionResults(objects)
-                    session.agent.submitCaptureResult(id: req.id, imageBase64: "", metadataJson: metadata)
+                    screenBridge.submitCaptureResult(id: req.id, imageBase64: "", metadataJson: metadata)
                 } else {
                     let base64 = WindowManager.cgImageToBase64(image) ?? ""
                     let metadata = "Window: \(info.title ?? "?"), App: \(info.appName ?? "?"), Size: \(Int(info.frame.width))x\(Int(info.frame.height))"
-                    session.agent.submitCaptureResult(id: req.id, imageBase64: base64, metadataJson: metadata)
+                    screenBridge.submitCaptureResult(id: req.id, imageBase64: base64, metadataJson: metadata)
                 }
             } catch {
-                session.agent.submitCaptureResult(
+                screenBridge.submitCaptureResult(
                     id: req.id, imageBase64: "", metadataJson: "Error: \(error)"
                 )
             }
         }
+    }
     }
 }
 
@@ -344,7 +352,7 @@ let ambientLoop = AmbientLoop(
 // /goal driver: keeps running turns until an evaluator confirms the condition
 // (or the maxTurns cap is hit). Shares the turn gate and the runTurn path.
 let goalDriver = GoalDriver(
-    agent: session.agent,
+    backend: session.backend,
     gate: turnGate,
     maxTurns: config.agent.maxTurns,
     runTurn: { _ in nil }
@@ -372,7 +380,7 @@ if let prompt = oneShotPrompt {
 LineEditor.saveHistory()
 session.stop()
 windowListPoller.cancel()
-capturePoller.cancel()
+capturePoller?.cancel()
 
 // Skip C++ static destructors to avoid ggml Metal device assertion crash.
 // Flush first — _exit bypasses stdio flushing, which would drop buffered
@@ -582,7 +590,7 @@ func handleCommand(_ command: String) {
         printHelp()
     case "/history":
         print("Conversation History:")
-        print(session.agent.getConversationHistory())
+        print(session.conversationHistory())
         print()
     case "/reset":
         session.reset()

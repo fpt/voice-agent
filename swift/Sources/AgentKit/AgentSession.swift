@@ -8,7 +8,10 @@ public class AgentSession: @unchecked Sendable {
 
     // MARK: - Public properties
 
-    public let agent: Agent
+    /// The agent behind this session. A protocol, not the concrete UniFFI type,
+    /// so a second backend (Foundation Models) can be substituted — see
+    /// docs/FOUNDATION_MODELS.md.
+    public let backend: AgentBackend
     public let tts: TextToSpeech
     public let config: Config
     public let language: String
@@ -70,7 +73,8 @@ public class AgentSession: @unchecked Sendable {
             mcpServers: mcpServers
         )
 
-        self.agent = try agentNew(config: agentConfig, approver: approver)
+        let agent = try agentNew(config: agentConfig, approver: approver)
+        self.backend = AppServerBackend(agent: agent)
         logger.info("Agent initialized")
 
         // TTS
@@ -113,7 +117,7 @@ public class AgentSession: @unchecked Sendable {
                     }
                 }()
                 systemPrompt = systemPrompt.replacingOccurrences(of: "{language}", with: languagePrompt)
-                agent.setSystemPrompt(prompt: systemPrompt)
+                backend.setSystemPrompt(systemPrompt)
                 logger.info("Loaded system prompt from \(resolvedPath)")
             } catch {
                 logger.warning("Failed to load system prompt: \(error)")
@@ -125,7 +129,7 @@ public class AgentSession: @unchecked Sendable {
         let skillPaths = config.agent.skillPaths ?? ["skills"]
         let discoveredSkills = SkillLoader.loadAll(paths: skillPaths, baseDir: configDir)
         for skill in discoveredSkills {
-            agent.addSkill(name: skill.name, description: skill.description, prompt: skill.prompt)
+            backend.addSkill(name: skill.name, description: skill.description, prompt: skill.prompt)
         }
         logger.info("Skills registered (\(discoveredSkills.count) from \(skillPaths))")
     }
@@ -144,20 +148,24 @@ public class AgentSession: @unchecked Sendable {
 
     /// Run one conversation turn.
     public func step(_ text: String) throws -> AgentResponse {
-        try agent.step(userInput: text)
+        try backend.step(text)
     }
-
 
     /// Reset conversation history.
     public func reset() {
-        agent.reset()
+        backend.reset()
+    }
+
+    /// The conversation so far, formatted for display.
+    public func conversationHistory() -> String {
+        backend.conversationHistory()
     }
 
     /// Process a slash command. Returns true if handled.
     public func handleCommand(_ command: String) -> Bool {
         switch command {
         case "/reset":
-            agent.reset()
+            backend.reset()
             return true
         case "/voices":
             TextToSpeech.printAvailableVoices()

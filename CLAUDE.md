@@ -54,7 +54,7 @@ the split (voice-agent = platform + app-server client; the agent core lives in
 | Package | Purpose |
 |---------|---------|
 | `VoiceAgentCli` | Main entry point (text/voice REPL), window-list + capture pollers |
-| `AgentKit` | `AgentSession` — shared agent lifecycle (init, skills, TTS) usable from CLI/iOS |
+| `AgentKit` | `AgentSession` — shared agent lifecycle (init, skills, TTS) usable from CLI/iOS. `AgentBackend` is the seam the frontend talks to; `AppServerBackend` is the implementation that drives a spawned app-server. See **[docs/FOUNDATION_MODELS.md](docs/FOUNDATION_MODELS.md)**. |
 | `Audio` | AudioCapture (mic -> SpeechTranscriber), VoiceProcessingIO |
 | `TTS` | AVSpeechSynthesizer wrapper |
 | `ScreenCapture` | WindowManager / window info for the capture client tools |
@@ -233,7 +233,7 @@ voice-agent/
 ├── swift/Sources/              # VoiceAgentCli, AgentKit, Audio, TTS, ScreenCapture, Util, AgentBridge(FFI)
 ├── win/VoiceAgentCli/          # C# frontend
 ├── scripts/                    # gen_uniffi{,_cs}.sh, build-win-local.bat, build-ios.sh
-└── docs/                       # REFACTOR.md, STEERING.md, VOICE_PROCESSING_IO.md
+└── docs/                       # REFACTOR.md, STEERING.md, FOUNDATION_MODELS.md, VOICE_PROCESSING_IO.md
 ```
 
 ## Troubleshooting
