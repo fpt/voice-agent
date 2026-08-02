@@ -186,14 +186,32 @@ codex-app-server protocol.
 |--------|-----------|---------|
 | `initialize` | out | capability negotiation |
 | `thread/start` | out | open a thread (cwd, model, developer instructions, approval policy, MCP config) |
-| `turn/start` | out | run one turn, block until it completes |
+| `turn/start` | out | **accept** a turn; answers at once with `{turn:{id,status}}` |
 | `item/tool/call` | **in** | backend invokes one of voice-agent's client tools |
 | `item/{commandExecution,fileChange}/requestApproval` | **in** | backend asks voice-agent to permit a mutation |
-| `item/completed` | **in** | carries the turn's final `agentMessage` text |
+| `item/completed` | **in** | an `agentMessage` (or other item); a turn may emit several |
+| `turn/completed` | **in** | the turn ended (`completed` \| `interrupted` \| …) — what a caller waits on |
+| `turn/failed` | **in** | gallium only; codex folds failures into `turn/completed` |
+
+### Turn lifecycle
+
+**`turn/start` does not block until the turn finishes.** Both backends answer it
+as soon as the turn is *accepted* and run the work in the background — that is
+what keeps a turn interruptible. The turn id is at **`turn.id`**, not `turnId`.
+
+So `run_turn_on` reads the id from the response and then blocks in `await_turn`
+until `turn/completed`/`turn/failed` names it, joining every `agentMessage` seen
+in between. Notifications can arrive *before* the response, so the per-turn slot
+is created on demand; the reader thread signals `closed` on EOF so a dead backend
+fails the waiter instead of hanging it.
+
+Getting this wrong is not hypothetical — it shipped. See
+**[docs/STEERING.md](docs/STEERING.md)** for the failure, and
+`crates/lib/examples/e2e_gallium.rs` to re-verify against a real backend.
 
 Key points:
 
-- **The transport is bidirectional** (`rpc.rs`): inbound requests are dispatched on their own threads so a `turn/start` in flight can be answered by client-tool calls the backend originates.
+- **The transport is bidirectional** (`rpc.rs`): inbound requests are dispatched on their own threads so a `turn/start` in flight can be answered by client-tool calls the backend originates. `Connection::request` also allows **concurrent outbound requests** — the writer lock is held only across the write — which is what will make `turn/steer` possible without transport changes.
 - `config.mcp_servers` is forwarded to the backend via `thread/start`'s `config.mcp_servers`; the backend connects them.
 - Known degradations vs. the old in-process agent: `step` returns text only (no keyword hints / token counts); `observe`/`step_with_allowed_tools` can't restrict the backend's own tool set (advisory only).
 
@@ -207,7 +225,7 @@ voice-agent/
 ├── swift/Sources/              # VoiceAgentCli, AgentKit, Audio, TTS, ScreenCapture, Util, AgentBridge(FFI)
 ├── win/VoiceAgentCli/          # C# frontend
 ├── scripts/                    # gen_uniffi{,_cs}.sh, build-win-local.bat, build-ios.sh
-└── docs/                       # REFACTOR.md, VOICE_PROCESSING_IO.md
+└── docs/                       # REFACTOR.md, STEERING.md, VOICE_PROCESSING_IO.md
 ```
 
 ## Troubleshooting
