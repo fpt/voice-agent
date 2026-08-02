@@ -2,7 +2,7 @@ using System.Globalization;
 using System.Runtime.Versioning;
 using System.Speech.Recognition;
 
-namespace KesselCli;
+namespace VoiceAgentCli;
 
 /// Outcome of a listen-mode capture.
 internal enum ListenOutcome

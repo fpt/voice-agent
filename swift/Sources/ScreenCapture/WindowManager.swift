@@ -60,8 +60,8 @@ public class WindowManager {
                     return nil
                 }
                 if bundle == "com.google.Chrome" && incognitoTitles.contains(title) { return nil }
-                // Drop the terminal window hosting kessel itself.
-                if title.lowercased().contains("kessel-cli") { return nil }
+                // Drop the terminal window hosting voice-agent itself.
+                if title.lowercased().contains("voice-agent-cli") { return nil }
             } else {
                 // Skip very small windows (menu bar items, etc.)
                 guard window.frame.width > 50, window.frame.height > 50 else { return nil }

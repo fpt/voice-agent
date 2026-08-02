@@ -60,13 +60,6 @@ func readLineAsync(prompt: String) async -> String? {
 // top-level code and the entry point is the top-level statement below; `@main`
 // can't be used here (it conflicts with top-level code).
 
-// `--play <file>`: open the standalone fantasy-console game window and play a
-// ROM. No agent/LLM is constructed, so this needs no model or API key. Runs the
-// AppKit loop and exits when the window closes (never returns).
-if let pi = CommandLine.arguments.firstIndex(of: "--play"), pi + 1 < CommandLine.arguments.count {
-    runPlayMode(romPath: CommandLine.arguments[pi + 1])
-}
-
 await runMain()
 
 @MainActor
@@ -96,19 +89,17 @@ for (index, arg) in arguments.enumerated() {
 }
 
 func printHelp() {
-    // Derived from argv[0]: this is installed as `kessel`, but still runs as
-    // `kessel-cli` in-repo via `swift run kessel-cli` (the Swift package's
+    // Derived from argv[0]: this is installed as `voice-agent`, but still runs as
+    // `voice-agent-cli` in-repo via `swift run voice-agent-cli` (the Swift package's
     // executable product name).
-    let name = (CommandLine.arguments.first as NSString?)?.lastPathComponent ?? "kessel"
+    let name = (CommandLine.arguments.first as NSString?)?.lastPathComponent ?? "voice-agent"
     print("""
-    Kessel - Local Voice Assistant
+    voice-agent - Local Voice Assistant
 
     Usage: \(name) [OPTIONS]
 
     Options:
         --config PATH      Path to configuration file (default: configs/gallium.yaml)
-        --play FILE        Open the fantasy-console game window and play a ROM
-                           (.lua or .asm); no model/API key needed
         --text, --no-voice Force the text REPL even if the config enables STT/voice
         --prompt, -p TEXT  Run one agent turn with TEXT, print the reply, and exit
         --verbose, -v      Enable verbose logging
@@ -118,7 +109,7 @@ func printHelp() {
         \(name)
         \(name) --config custom.yaml
         \(name) --config configs/codex.yaml --text
-        \(name) --config configs/codex.yaml -p "write a pong game on the VM and run 3 frames"
+        \(name) --config configs/codex.yaml -p "what am I working on right now?"
         \(name) --verbose
     """)
 }
@@ -142,7 +133,7 @@ do {
 // Line editing + persistent REPL history for both the text and voice prompts.
 // Done before the agent starts so the history file exists even if init fails.
 LineEditor.configure(
-    historyPath: NSString(string: "~/.cache/kessel/repl_history").expandingTildeInPath
+    historyPath: NSString(string: "~/.cache/voice-agent/repl_history").expandingTildeInPath
 )
 
 // Mutation-approval gate for the backend. One-shot (`--prompt`) is
@@ -418,9 +409,9 @@ func prepareVoiceMode() async -> Bool {
 }
 
 /// Run a single agent turn non-interactively and return. Used by `--prompt` so
-/// the full `agent_new` tool set (including the `vm_*` fantasy-console tools) can
-/// be driven from the command line and scripts. Reply goes to stdout; logs to
-/// stderr. TTS/ambient loop stay silent here.
+/// the full `agent_new` tool set can be driven from the command line and
+/// scripts. Reply goes to stdout; logs to stderr. TTS/ambient loop stay silent
+/// here.
 func runOneShot(_ prompt: String) async {
     logger.info("One-shot turn: \(prompt)")
     do {
@@ -448,7 +439,7 @@ func runTextMode() async {
     print("""
 
 ===========================================
-  Kessel - Text Mode
+  voice-agent - Text Mode
 ===========================================
 
 Model: \(config.llm.model ?? config.llm.modelPath ?? "(local)")
@@ -469,7 +460,7 @@ Type your messages below. Commands:
   /listen   - Switch to continuous voice mode (speak instead of type)
 
 Editing: Left/Right move the cursor, Up/Down walk history (persisted to
-  ~/.cache/kessel/repl_history), TAB completes /commands, Ctrl+A/E jump to line
+  ~/.cache/voice-agent/repl_history), TAB completes /commands, Ctrl+A/E jump to line
   start/end, Esc+B/F jump by word, Ctrl+W/K/U delete word/to-end/whole line,
   Ctrl+C or Ctrl+D exits.
 
@@ -819,7 +810,7 @@ func runContinuousVoiceMode() async {
         print("""
 
 ===========================================
-  Kessel - Continuous Voice Mode
+  voice-agent - Continuous Voice Mode
 ===========================================
 
 Model: \(config.llm.model ?? config.llm.modelPath ?? "(local)")

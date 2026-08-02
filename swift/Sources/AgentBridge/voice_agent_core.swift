@@ -7,8 +7,8 @@ import Foundation
 // Depending on the consumer's build setup, the low-level FFI code
 // might be in a separate module, or it might be compiled inline into
 // this module. This is a bit of light hackery to work with both.
-#if canImport(kessel_coreFFI)
-import kessel_coreFFI
+#if canImport(voice_agent_coreFFI)
+import voice_agent_coreFFI
 #endif
 
 fileprivate extension RustBuffer {
@@ -25,13 +25,13 @@ fileprivate extension RustBuffer {
     }
 
     static func from(_ ptr: UnsafeBufferPointer<UInt8>) -> RustBuffer {
-        try! rustCall { ffi_kessel_core_rustbuffer_from_bytes(ForeignBytes(bufferPointer: ptr), $0) }
+        try! rustCall { ffi_voice_agent_core_rustbuffer_from_bytes(ForeignBytes(bufferPointer: ptr), $0) }
     }
 
     // Frees the buffer in place.
     // The buffer must not be used after this is called.
     func deallocate() {
-        try! rustCall { ffi_kessel_core_rustbuffer_free(self, $0) }
+        try! rustCall { ffi_voice_agent_core_rustbuffer_free(self, $0) }
     }
 }
 
@@ -399,22 +399,6 @@ fileprivate class UniffiHandleMap<T> {
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
-fileprivate struct FfiConverterUInt8: FfiConverterPrimitive {
-    typealias FfiType = UInt8
-    typealias SwiftType = UInt8
-
-    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> UInt8 {
-        return try lift(readInt(&buf))
-    }
-
-    public static func write(_ value: UInt8, into buf: inout [UInt8]) {
-        writeInt(&buf, lower(value))
-    }
-}
-
-#if swift(>=5.8)
-@_documentation(visibility: private)
-#endif
 fileprivate struct FfiConverterUInt32: FfiConverterPrimitive {
     typealias FfiType = UInt32
     typealias SwiftType = UInt32
@@ -541,24 +525,6 @@ fileprivate struct FfiConverterString: FfiConverter {
     }
 }
 
-#if swift(>=5.8)
-@_documentation(visibility: private)
-#endif
-fileprivate struct FfiConverterData: FfiConverterRustBuffer {
-    typealias SwiftType = Data
-
-    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> Data {
-        let len: Int32 = try readInt(&buf)
-        return Data(try readBytes(&buf, count: Int(len)))
-    }
-
-    public static func write(_ value: Data, into buf: inout [UInt8]) {
-        let len = Int32(value.count)
-        writeInt(&buf, len)
-        writeBytes(&buf, value)
-    }
-}
-
 
 
 
@@ -631,7 +597,7 @@ open class Agent:
     @_documentation(visibility: private)
 #endif
     public func uniffiClonePointer() -> UnsafeMutableRawPointer {
-        return try! rustCall { uniffi_kessel_core_fn_clone_agent(self.pointer, $0) }
+        return try! rustCall { uniffi_voice_agent_core_fn_clone_agent(self.pointer, $0) }
     }
     // No primary constructor declared for this class.
 
@@ -640,14 +606,14 @@ open class Agent:
             return
         }
 
-        try! rustCall { uniffi_kessel_core_fn_free_agent(pointer, $0) }
+        try! rustCall { uniffi_voice_agent_core_fn_free_agent(pointer, $0) }
     }
 
     
 
     
 open func addSkill(name: String, description: String, prompt: String) {try! rustCall() {
-    uniffi_kessel_core_fn_method_agent_add_skill(self.uniffiClonePointer(),
+    uniffi_voice_agent_core_fn_method_agent_add_skill(self.uniffiClonePointer(),
         FfiConverterString.lower(name),
         FfiConverterString.lower(description),
         FfiConverterString.lower(prompt),$0
@@ -656,42 +622,42 @@ open func addSkill(name: String, description: String, prompt: String) {try! rust
 }
     
 open func clearGoal() {try! rustCall() {
-    uniffi_kessel_core_fn_method_agent_clear_goal(self.uniffiClonePointer(),$0
+    uniffi_voice_agent_core_fn_method_agent_clear_goal(self.uniffiClonePointer(),$0
     )
 }
 }
     
 open func drainCaptureRequests() -> [CaptureRequest] {
     return try!  FfiConverterSequenceTypeCaptureRequest.lift(try! rustCall() {
-    uniffi_kessel_core_fn_method_agent_drain_capture_requests(self.uniffiClonePointer(),$0
+    uniffi_voice_agent_core_fn_method_agent_drain_capture_requests(self.uniffiClonePointer(),$0
     )
 })
 }
     
 open func evaluateGoal()throws  -> GoalEvaluation {
     return try  FfiConverterTypeGoalEvaluation.lift(try rustCallWithError(FfiConverterTypeAgentError.lift) {
-    uniffi_kessel_core_fn_method_agent_evaluate_goal(self.uniffiClonePointer(),$0
+    uniffi_voice_agent_core_fn_method_agent_evaluate_goal(self.uniffiClonePointer(),$0
     )
 })
 }
     
 open func getConversationHistory() -> String {
     return try!  FfiConverterString.lift(try! rustCall() {
-    uniffi_kessel_core_fn_method_agent_get_conversation_history(self.uniffiClonePointer(),$0
+    uniffi_voice_agent_core_fn_method_agent_get_conversation_history(self.uniffiClonePointer(),$0
     )
 })
 }
     
 open func goalStatus() -> GoalStatus? {
     return try!  FfiConverterOptionTypeGoalStatus.lift(try! rustCall() {
-    uniffi_kessel_core_fn_method_agent_goal_status(self.uniffiClonePointer(),$0
+    uniffi_voice_agent_core_fn_method_agent_goal_status(self.uniffiClonePointer(),$0
     )
 })
 }
     
 open func observe(prompt: String, allowedTools: [String])throws  -> AgentResponse {
     return try  FfiConverterTypeAgentResponse.lift(try rustCallWithError(FfiConverterTypeAgentError.lift) {
-    uniffi_kessel_core_fn_method_agent_observe(self.uniffiClonePointer(),
+    uniffi_voice_agent_core_fn_method_agent_observe(self.uniffiClonePointer(),
         FfiConverterString.lower(prompt),
         FfiConverterSequenceString.lower(allowedTools),$0
     )
@@ -700,7 +666,7 @@ open func observe(prompt: String, allowedTools: [String])throws  -> AgentRespons
     
 open func processBackchannel(partialInput: String, pauseMs: UInt64) -> String? {
     return try!  FfiConverterOptionString.lift(try! rustCall() {
-    uniffi_kessel_core_fn_method_agent_process_backchannel(self.uniffiClonePointer(),
+    uniffi_voice_agent_core_fn_method_agent_process_backchannel(self.uniffiClonePointer(),
         FfiConverterString.lower(partialInput),
         FfiConverterUInt64.lower(pauseMs),$0
     )
@@ -708,7 +674,7 @@ open func processBackchannel(partialInput: String, pauseMs: UInt64) -> String? {
 }
     
 open func pushSituationMessage(text: String, source: String, sessionId: String) {try! rustCall() {
-    uniffi_kessel_core_fn_method_agent_push_situation_message(self.uniffiClonePointer(),
+    uniffi_voice_agent_core_fn_method_agent_push_situation_message(self.uniffiClonePointer(),
         FfiConverterString.lower(text),
         FfiConverterString.lower(source),
         FfiConverterString.lower(sessionId),$0
@@ -717,20 +683,20 @@ open func pushSituationMessage(text: String, source: String, sessionId: String) 
 }
     
 open func reset() {try! rustCall() {
-    uniffi_kessel_core_fn_method_agent_reset(self.uniffiClonePointer(),$0
+    uniffi_voice_agent_core_fn_method_agent_reset(self.uniffiClonePointer(),$0
     )
 }
 }
     
 open func setGoal(condition: String) {try! rustCall() {
-    uniffi_kessel_core_fn_method_agent_set_goal(self.uniffiClonePointer(),
+    uniffi_voice_agent_core_fn_method_agent_set_goal(self.uniffiClonePointer(),
         FfiConverterString.lower(condition),$0
     )
 }
 }
     
 open func setSystemPrompt(prompt: String) {try! rustCall() {
-    uniffi_kessel_core_fn_method_agent_set_system_prompt(self.uniffiClonePointer(),
+    uniffi_voice_agent_core_fn_method_agent_set_system_prompt(self.uniffiClonePointer(),
         FfiConverterString.lower(prompt),$0
     )
 }
@@ -738,7 +704,7 @@ open func setSystemPrompt(prompt: String) {try! rustCall() {
     
 open func step(userInput: String)throws  -> AgentResponse {
     return try  FfiConverterTypeAgentResponse.lift(try rustCallWithError(FfiConverterTypeAgentError.lift) {
-    uniffi_kessel_core_fn_method_agent_step(self.uniffiClonePointer(),
+    uniffi_voice_agent_core_fn_method_agent_step(self.uniffiClonePointer(),
         FfiConverterString.lower(userInput),$0
     )
 })
@@ -746,7 +712,7 @@ open func step(userInput: String)throws  -> AgentResponse {
     
 open func stepWithAllowedTools(userInput: String, allowedTools: [String])throws  -> AgentResponse {
     return try  FfiConverterTypeAgentResponse.lift(try rustCallWithError(FfiConverterTypeAgentError.lift) {
-    uniffi_kessel_core_fn_method_agent_step_with_allowed_tools(self.uniffiClonePointer(),
+    uniffi_voice_agent_core_fn_method_agent_step_with_allowed_tools(self.uniffiClonePointer(),
         FfiConverterString.lower(userInput),
         FfiConverterSequenceString.lower(allowedTools),$0
     )
@@ -754,7 +720,7 @@ open func stepWithAllowedTools(userInput: String, allowedTools: [String])throws 
 }
     
 open func submitCaptureResult(id: String, imageBase64: String, metadataJson: String) {try! rustCall() {
-    uniffi_kessel_core_fn_method_agent_submit_capture_result(self.uniffiClonePointer(),
+    uniffi_voice_agent_core_fn_method_agent_submit_capture_result(self.uniffiClonePointer(),
         FfiConverterString.lower(id),
         FfiConverterString.lower(imageBase64),
         FfiConverterString.lower(metadataJson),$0
@@ -860,7 +826,7 @@ open class MutationApproverImpl:
     @_documentation(visibility: private)
 #endif
     public func uniffiClonePointer() -> UnsafeMutableRawPointer {
-        return try! rustCall { uniffi_kessel_core_fn_clone_mutationapprover(self.pointer, $0) }
+        return try! rustCall { uniffi_voice_agent_core_fn_clone_mutationapprover(self.pointer, $0) }
     }
     // No primary constructor declared for this class.
 
@@ -869,7 +835,7 @@ open class MutationApproverImpl:
             return
         }
 
-        try! rustCall { uniffi_kessel_core_fn_free_mutationapprover(pointer, $0) }
+        try! rustCall { uniffi_voice_agent_core_fn_free_mutationapprover(pointer, $0) }
     }
 
     
@@ -877,7 +843,7 @@ open class MutationApproverImpl:
     
 open func approve(action: String, target: String) -> ApprovalDecision {
     return try!  FfiConverterTypeApprovalDecision.lift(try! rustCall() {
-    uniffi_kessel_core_fn_method_mutationapprover_approve(self.uniffiClonePointer(),
+    uniffi_voice_agent_core_fn_method_mutationapprover_approve(self.uniffiClonePointer(),
         FfiConverterString.lower(action),
         FfiConverterString.lower(target),$0
     )
@@ -936,7 +902,7 @@ fileprivate struct UniffiCallbackInterfaceMutationApprover {
 }
 
 private func uniffiCallbackInitMutationApprover() {
-    uniffi_kessel_core_fn_init_callback_vtable_mutationapprover(&UniffiCallbackInterfaceMutationApprover.vtable)
+    uniffi_voice_agent_core_fn_init_callback_vtable_mutationapprover(&UniffiCallbackInterfaceMutationApprover.vtable)
 }
 
 #if swift(>=5.8)
@@ -992,198 +958,6 @@ public func FfiConverterTypeMutationApprover_lift(_ pointer: UnsafeMutableRawPoi
 #endif
 public func FfiConverterTypeMutationApprover_lower(_ value: MutationApprover) -> UnsafeMutableRawPointer {
     return FfiConverterTypeMutationApprover.lower(value)
-}
-
-
-
-
-public protocol VmPlayerProtocol : AnyObject {
-    
-    func controlsJson()  -> String
-    
-    func framebufferRgba()  -> Data?
-    
-    func hasRom()  -> Bool
-    
-    func isHalted()  -> Bool
-    
-    func isPaused()  -> Bool
-    
-    func load(source: String, path: String)  -> String
-    
-    func screenDim()  -> UInt32
-    
-    func tick(buttons: UInt8) 
-    
-}
-
-open class VmPlayer:
-    VmPlayerProtocol {
-    fileprivate let pointer: UnsafeMutableRawPointer!
-
-    /// Used to instantiate a [FFIObject] without an actual pointer, for fakes in tests, mostly.
-#if swift(>=5.8)
-    @_documentation(visibility: private)
-#endif
-    public struct NoPointer {
-        public init() {}
-    }
-
-    // TODO: We'd like this to be `private` but for Swifty reasons,
-    // we can't implement `FfiConverter` without making this `required` and we can't
-    // make it `required` without making it `public`.
-    required public init(unsafeFromRawPointer pointer: UnsafeMutableRawPointer) {
-        self.pointer = pointer
-    }
-
-    // This constructor can be used to instantiate a fake object.
-    // - Parameter noPointer: Placeholder value so we can have a constructor separate from the default empty one that may be implemented for classes extending [FFIObject].
-    //
-    // - Warning:
-    //     Any object instantiated with this constructor cannot be passed to an actual Rust-backed object. Since there isn't a backing [Pointer] the FFI lower functions will crash.
-#if swift(>=5.8)
-    @_documentation(visibility: private)
-#endif
-    public init(noPointer: NoPointer) {
-        self.pointer = nil
-    }
-
-#if swift(>=5.8)
-    @_documentation(visibility: private)
-#endif
-    public func uniffiClonePointer() -> UnsafeMutableRawPointer {
-        return try! rustCall { uniffi_kessel_core_fn_clone_vmplayer(self.pointer, $0) }
-    }
-public convenience init() {
-    let pointer =
-        try! rustCall() {
-    uniffi_kessel_core_fn_constructor_vmplayer_new($0
-    )
-}
-    self.init(unsafeFromRawPointer: pointer)
-}
-
-    deinit {
-        guard let pointer = pointer else {
-            return
-        }
-
-        try! rustCall { uniffi_kessel_core_fn_free_vmplayer(pointer, $0) }
-    }
-
-    
-
-    
-open func controlsJson() -> String {
-    return try!  FfiConverterString.lift(try! rustCall() {
-    uniffi_kessel_core_fn_method_vmplayer_controls_json(self.uniffiClonePointer(),$0
-    )
-})
-}
-    
-open func framebufferRgba() -> Data? {
-    return try!  FfiConverterOptionData.lift(try! rustCall() {
-    uniffi_kessel_core_fn_method_vmplayer_framebuffer_rgba(self.uniffiClonePointer(),$0
-    )
-})
-}
-    
-open func hasRom() -> Bool {
-    return try!  FfiConverterBool.lift(try! rustCall() {
-    uniffi_kessel_core_fn_method_vmplayer_has_rom(self.uniffiClonePointer(),$0
-    )
-})
-}
-    
-open func isHalted() -> Bool {
-    return try!  FfiConverterBool.lift(try! rustCall() {
-    uniffi_kessel_core_fn_method_vmplayer_is_halted(self.uniffiClonePointer(),$0
-    )
-})
-}
-    
-open func isPaused() -> Bool {
-    return try!  FfiConverterBool.lift(try! rustCall() {
-    uniffi_kessel_core_fn_method_vmplayer_is_paused(self.uniffiClonePointer(),$0
-    )
-})
-}
-    
-open func load(source: String, path: String) -> String {
-    return try!  FfiConverterString.lift(try! rustCall() {
-    uniffi_kessel_core_fn_method_vmplayer_load(self.uniffiClonePointer(),
-        FfiConverterString.lower(source),
-        FfiConverterString.lower(path),$0
-    )
-})
-}
-    
-open func screenDim() -> UInt32 {
-    return try!  FfiConverterUInt32.lift(try! rustCall() {
-    uniffi_kessel_core_fn_method_vmplayer_screen_dim(self.uniffiClonePointer(),$0
-    )
-})
-}
-    
-open func tick(buttons: UInt8) {try! rustCall() {
-    uniffi_kessel_core_fn_method_vmplayer_tick(self.uniffiClonePointer(),
-        FfiConverterUInt8.lower(buttons),$0
-    )
-}
-}
-    
-
-}
-
-#if swift(>=5.8)
-@_documentation(visibility: private)
-#endif
-public struct FfiConverterTypeVmPlayer: FfiConverter {
-
-    typealias FfiType = UnsafeMutableRawPointer
-    typealias SwiftType = VmPlayer
-
-    public static func lift(_ pointer: UnsafeMutableRawPointer) throws -> VmPlayer {
-        return VmPlayer(unsafeFromRawPointer: pointer)
-    }
-
-    public static func lower(_ value: VmPlayer) -> UnsafeMutableRawPointer {
-        return value.uniffiClonePointer()
-    }
-
-    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> VmPlayer {
-        let v: UInt64 = try readInt(&buf)
-        // The Rust code won't compile if a pointer won't fit in a UInt64.
-        // We have to go via `UInt` because that's the thing that's the size of a pointer.
-        let ptr = UnsafeMutableRawPointer(bitPattern: UInt(truncatingIfNeeded: v))
-        if (ptr == nil) {
-            throw UniffiInternalError.unexpectedNullPointer
-        }
-        return try lift(ptr!)
-    }
-
-    public static func write(_ value: VmPlayer, into buf: inout [UInt8]) {
-        // This fiddling is because `Int` is the thing that's the same size as a pointer.
-        // The Rust code won't compile if a pointer won't fit in a `UInt64`.
-        writeInt(&buf, UInt64(bitPattern: Int64(Int(bitPattern: lower(value)))))
-    }
-}
-
-
-
-
-#if swift(>=5.8)
-@_documentation(visibility: private)
-#endif
-public func FfiConverterTypeVmPlayer_lift(_ pointer: UnsafeMutableRawPointer) throws -> VmPlayer {
-    return try FfiConverterTypeVmPlayer.lift(pointer)
-}
-
-#if swift(>=5.8)
-@_documentation(visibility: private)
-#endif
-public func FfiConverterTypeVmPlayer_lower(_ value: VmPlayer) -> UnsafeMutableRawPointer {
-    return FfiConverterTypeVmPlayer.lower(value)
 }
 
 
@@ -2087,30 +1861,6 @@ fileprivate struct FfiConverterOptionString: FfiConverterRustBuffer {
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
-fileprivate struct FfiConverterOptionData: FfiConverterRustBuffer {
-    typealias SwiftType = Data?
-
-    public static func write(_ value: SwiftType, into buf: inout [UInt8]) {
-        guard let value = value else {
-            writeInt(&buf, Int8(0))
-            return
-        }
-        writeInt(&buf, Int8(1))
-        FfiConverterData.write(value, into: &buf)
-    }
-
-    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SwiftType {
-        switch try readInt(&buf) as Int8 {
-        case 0: return nil
-        case 1: return try FfiConverterData.read(from: &buf)
-        default: throw UniffiInternalError.unexpectedOptionalTag
-        }
-    }
-}
-
-#if swift(>=5.8)
-@_documentation(visibility: private)
-#endif
 fileprivate struct FfiConverterOptionTypeMutationApprover: FfiConverterRustBuffer {
     typealias SwiftType = MutationApprover?
 
@@ -2256,7 +2006,7 @@ fileprivate struct FfiConverterSequenceTypeMcpServerConfig: FfiConverterRustBuff
 }
 public func agentNew(config: AgentConfig, approver: MutationApprover?)throws  -> Agent {
     return try  FfiConverterTypeAgent.lift(try rustCallWithError(FfiConverterTypeAgentError.lift) {
-    uniffi_kessel_core_fn_func_agent_new(
+    uniffi_voice_agent_core_fn_func_agent_new(
         FfiConverterTypeAgentConfig.lower(config),
         FfiConverterOptionTypeMutationApprover.lower(approver),$0
     )
@@ -2274,86 +2024,59 @@ private var initializationResult: InitializationResult = {
     // Get the bindings contract version from our ComponentInterface
     let bindings_contract_version = 26
     // Get the scaffolding contract version by calling the into the dylib
-    let scaffolding_contract_version = ffi_kessel_core_uniffi_contract_version()
+    let scaffolding_contract_version = ffi_voice_agent_core_uniffi_contract_version()
     if bindings_contract_version != scaffolding_contract_version {
         return InitializationResult.contractVersionMismatch
     }
-    if (uniffi_kessel_core_checksum_func_agent_new() != 38240) {
+    if (uniffi_voice_agent_core_checksum_func_agent_new() != 53214) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_kessel_core_checksum_method_agent_add_skill() != 48534) {
+    if (uniffi_voice_agent_core_checksum_method_agent_add_skill() != 34521) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_kessel_core_checksum_method_agent_clear_goal() != 45571) {
+    if (uniffi_voice_agent_core_checksum_method_agent_clear_goal() != 65305) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_kessel_core_checksum_method_agent_drain_capture_requests() != 12576) {
+    if (uniffi_voice_agent_core_checksum_method_agent_drain_capture_requests() != 44042) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_kessel_core_checksum_method_agent_evaluate_goal() != 23454) {
+    if (uniffi_voice_agent_core_checksum_method_agent_evaluate_goal() != 30302) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_kessel_core_checksum_method_agent_get_conversation_history() != 51486) {
+    if (uniffi_voice_agent_core_checksum_method_agent_get_conversation_history() != 47941) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_kessel_core_checksum_method_agent_goal_status() != 43197) {
+    if (uniffi_voice_agent_core_checksum_method_agent_goal_status() != 57962) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_kessel_core_checksum_method_agent_observe() != 40372) {
+    if (uniffi_voice_agent_core_checksum_method_agent_observe() != 40) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_kessel_core_checksum_method_agent_process_backchannel() != 1602) {
+    if (uniffi_voice_agent_core_checksum_method_agent_process_backchannel() != 27285) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_kessel_core_checksum_method_agent_push_situation_message() != 46180) {
+    if (uniffi_voice_agent_core_checksum_method_agent_push_situation_message() != 40141) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_kessel_core_checksum_method_agent_reset() != 23598) {
+    if (uniffi_voice_agent_core_checksum_method_agent_reset() != 27753) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_kessel_core_checksum_method_agent_set_goal() != 54145) {
+    if (uniffi_voice_agent_core_checksum_method_agent_set_goal() != 25318) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_kessel_core_checksum_method_agent_set_system_prompt() != 21644) {
+    if (uniffi_voice_agent_core_checksum_method_agent_set_system_prompt() != 60393) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_kessel_core_checksum_method_agent_step() != 42753) {
+    if (uniffi_voice_agent_core_checksum_method_agent_step() != 17531) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_kessel_core_checksum_method_agent_step_with_allowed_tools() != 6850) {
+    if (uniffi_voice_agent_core_checksum_method_agent_step_with_allowed_tools() != 5365) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_kessel_core_checksum_method_agent_submit_capture_result() != 47839) {
+    if (uniffi_voice_agent_core_checksum_method_agent_submit_capture_result() != 11728) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_kessel_core_checksum_method_mutationapprover_approve() != 20989) {
-        return InitializationResult.apiChecksumMismatch
-    }
-    if (uniffi_kessel_core_checksum_method_vmplayer_controls_json() != 8354) {
-        return InitializationResult.apiChecksumMismatch
-    }
-    if (uniffi_kessel_core_checksum_method_vmplayer_framebuffer_rgba() != 34844) {
-        return InitializationResult.apiChecksumMismatch
-    }
-    if (uniffi_kessel_core_checksum_method_vmplayer_has_rom() != 43393) {
-        return InitializationResult.apiChecksumMismatch
-    }
-    if (uniffi_kessel_core_checksum_method_vmplayer_is_halted() != 6751) {
-        return InitializationResult.apiChecksumMismatch
-    }
-    if (uniffi_kessel_core_checksum_method_vmplayer_is_paused() != 37829) {
-        return InitializationResult.apiChecksumMismatch
-    }
-    if (uniffi_kessel_core_checksum_method_vmplayer_load() != 24897) {
-        return InitializationResult.apiChecksumMismatch
-    }
-    if (uniffi_kessel_core_checksum_method_vmplayer_screen_dim() != 46881) {
-        return InitializationResult.apiChecksumMismatch
-    }
-    if (uniffi_kessel_core_checksum_method_vmplayer_tick() != 11299) {
-        return InitializationResult.apiChecksumMismatch
-    }
-    if (uniffi_kessel_core_checksum_constructor_vmplayer_new() != 36995) {
+    if (uniffi_voice_agent_core_checksum_method_mutationapprover_approve() != 4961) {
         return InitializationResult.apiChecksumMismatch
     }
 

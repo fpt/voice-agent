@@ -7,8 +7,8 @@ import Foundation
 // Depending on the consumer's build setup, the low-level FFI code
 // might be in a separate module, or it might be compiled inline into
 // this module. This is a bit of light hackery to work with both.
-#if canImport(kessel_coreFFI)
-import kessel_coreFFI
+#if canImport(voice_agent_coreFFI)
+import voice_agent_coreFFI
 #endif
 
 fileprivate extension RustBuffer {
@@ -25,13 +25,13 @@ fileprivate extension RustBuffer {
     }
 
     static func from(_ ptr: UnsafeBufferPointer<UInt8>) -> RustBuffer {
-        try! rustCall { ffi_kessel_core_rustbuffer_from_bytes(ForeignBytes(bufferPointer: ptr), $0) }
+        try! rustCall { ffi_voice_agent_core_rustbuffer_from_bytes(ForeignBytes(bufferPointer: ptr), $0) }
     }
 
     // Frees the buffer in place.
     // The buffer must not be used after this is called.
     func deallocate() {
-        try! rustCall { ffi_kessel_core_rustbuffer_free(self, $0) }
+        try! rustCall { ffi_voice_agent_core_rustbuffer_free(self, $0) }
     }
 }
 
@@ -532,25 +532,33 @@ public protocol AgentProtocol : AnyObject {
     
     func addSkill(name: String, description: String, prompt: String) 
     
-    func chatOnce(input: String, skillName: String?) throws  -> String
+    func clearGoal() 
     
-    func drainWatcherSummaries()  -> [EventSummary]
+    func drainCaptureRequests()  -> [CaptureRequest]
     
-    func feedUserSpeech(text: String) 
-    
-    func feedWatcherEvent(json: String) throws 
+    func evaluateGoal() throws  -> GoalEvaluation
     
     func getConversationHistory()  -> String
     
+    func goalStatus()  -> GoalStatus?
+    
+    func observe(prompt: String, allowedTools: [String]) throws  -> AgentResponse
+    
     func processBackchannel(partialInput: String, pauseMs: UInt64)  -> String?
     
+    func pushSituationMessage(text: String, source: String, sessionId: String) 
+    
     func reset() 
+    
+    func setGoal(condition: String) 
     
     func setSystemPrompt(prompt: String) 
     
     func step(userInput: String) throws  -> AgentResponse
     
     func stepWithAllowedTools(userInput: String, allowedTools: [String]) throws  -> AgentResponse
+    
+    func submitCaptureResult(id: String, imageBase64: String, metadataJson: String) 
     
 }
 
@@ -589,7 +597,7 @@ open class Agent:
     @_documentation(visibility: private)
 #endif
     public func uniffiClonePointer() -> UnsafeMutableRawPointer {
-        return try! rustCall { uniffi_kessel_core_fn_clone_agent(self.pointer, $0) }
+        return try! rustCall { uniffi_voice_agent_core_fn_clone_agent(self.pointer, $0) }
     }
     // No primary constructor declared for this class.
 
@@ -598,14 +606,14 @@ open class Agent:
             return
         }
 
-        try! rustCall { uniffi_kessel_core_fn_free_agent(pointer, $0) }
+        try! rustCall { uniffi_voice_agent_core_fn_free_agent(pointer, $0) }
     }
 
     
 
     
 open func addSkill(name: String, description: String, prompt: String) {try! rustCall() {
-    uniffi_kessel_core_fn_method_agent_add_skill(self.uniffiClonePointer(),
+    uniffi_voice_agent_core_fn_method_agent_add_skill(self.uniffiClonePointer(),
         FfiConverterString.lower(name),
         FfiConverterString.lower(description),
         FfiConverterString.lower(prompt),$0
@@ -613,60 +621,82 @@ open func addSkill(name: String, description: String, prompt: String) {try! rust
 }
 }
     
-open func chatOnce(input: String, skillName: String?)throws  -> String {
-    return try  FfiConverterString.lift(try rustCallWithError(FfiConverterTypeAgentError.lift) {
-    uniffi_kessel_core_fn_method_agent_chat_once(self.uniffiClonePointer(),
-        FfiConverterString.lower(input),
-        FfiConverterOptionString.lower(skillName),$0
+open func clearGoal() {try! rustCall() {
+    uniffi_voice_agent_core_fn_method_agent_clear_goal(self.uniffiClonePointer(),$0
+    )
+}
+}
+    
+open func drainCaptureRequests() -> [CaptureRequest] {
+    return try!  FfiConverterSequenceTypeCaptureRequest.lift(try! rustCall() {
+    uniffi_voice_agent_core_fn_method_agent_drain_capture_requests(self.uniffiClonePointer(),$0
     )
 })
 }
     
-open func drainWatcherSummaries() -> [EventSummary] {
-    return try!  FfiConverterSequenceTypeEventSummary.lift(try! rustCall() {
-    uniffi_kessel_core_fn_method_agent_drain_watcher_summaries(self.uniffiClonePointer(),$0
+open func evaluateGoal()throws  -> GoalEvaluation {
+    return try  FfiConverterTypeGoalEvaluation.lift(try rustCallWithError(FfiConverterTypeAgentError.lift) {
+    uniffi_voice_agent_core_fn_method_agent_evaluate_goal(self.uniffiClonePointer(),$0
     )
 })
-}
-    
-open func feedUserSpeech(text: String) {try! rustCall() {
-    uniffi_kessel_core_fn_method_agent_feed_user_speech(self.uniffiClonePointer(),
-        FfiConverterString.lower(text),$0
-    )
-}
-}
-    
-open func feedWatcherEvent(json: String)throws  {try rustCallWithError(FfiConverterTypeAgentError.lift) {
-    uniffi_kessel_core_fn_method_agent_feed_watcher_event(self.uniffiClonePointer(),
-        FfiConverterString.lower(json),$0
-    )
-}
 }
     
 open func getConversationHistory() -> String {
     return try!  FfiConverterString.lift(try! rustCall() {
-    uniffi_kessel_core_fn_method_agent_get_conversation_history(self.uniffiClonePointer(),$0
+    uniffi_voice_agent_core_fn_method_agent_get_conversation_history(self.uniffiClonePointer(),$0
+    )
+})
+}
+    
+open func goalStatus() -> GoalStatus? {
+    return try!  FfiConverterOptionTypeGoalStatus.lift(try! rustCall() {
+    uniffi_voice_agent_core_fn_method_agent_goal_status(self.uniffiClonePointer(),$0
+    )
+})
+}
+    
+open func observe(prompt: String, allowedTools: [String])throws  -> AgentResponse {
+    return try  FfiConverterTypeAgentResponse.lift(try rustCallWithError(FfiConverterTypeAgentError.lift) {
+    uniffi_voice_agent_core_fn_method_agent_observe(self.uniffiClonePointer(),
+        FfiConverterString.lower(prompt),
+        FfiConverterSequenceString.lower(allowedTools),$0
     )
 })
 }
     
 open func processBackchannel(partialInput: String, pauseMs: UInt64) -> String? {
     return try!  FfiConverterOptionString.lift(try! rustCall() {
-    uniffi_kessel_core_fn_method_agent_process_backchannel(self.uniffiClonePointer(),
+    uniffi_voice_agent_core_fn_method_agent_process_backchannel(self.uniffiClonePointer(),
         FfiConverterString.lower(partialInput),
         FfiConverterUInt64.lower(pauseMs),$0
     )
 })
 }
     
+open func pushSituationMessage(text: String, source: String, sessionId: String) {try! rustCall() {
+    uniffi_voice_agent_core_fn_method_agent_push_situation_message(self.uniffiClonePointer(),
+        FfiConverterString.lower(text),
+        FfiConverterString.lower(source),
+        FfiConverterString.lower(sessionId),$0
+    )
+}
+}
+    
 open func reset() {try! rustCall() {
-    uniffi_kessel_core_fn_method_agent_reset(self.uniffiClonePointer(),$0
+    uniffi_voice_agent_core_fn_method_agent_reset(self.uniffiClonePointer(),$0
+    )
+}
+}
+    
+open func setGoal(condition: String) {try! rustCall() {
+    uniffi_voice_agent_core_fn_method_agent_set_goal(self.uniffiClonePointer(),
+        FfiConverterString.lower(condition),$0
     )
 }
 }
     
 open func setSystemPrompt(prompt: String) {try! rustCall() {
-    uniffi_kessel_core_fn_method_agent_set_system_prompt(self.uniffiClonePointer(),
+    uniffi_voice_agent_core_fn_method_agent_set_system_prompt(self.uniffiClonePointer(),
         FfiConverterString.lower(prompt),$0
     )
 }
@@ -674,7 +704,7 @@ open func setSystemPrompt(prompt: String) {try! rustCall() {
     
 open func step(userInput: String)throws  -> AgentResponse {
     return try  FfiConverterTypeAgentResponse.lift(try rustCallWithError(FfiConverterTypeAgentError.lift) {
-    uniffi_kessel_core_fn_method_agent_step(self.uniffiClonePointer(),
+    uniffi_voice_agent_core_fn_method_agent_step(self.uniffiClonePointer(),
         FfiConverterString.lower(userInput),$0
     )
 })
@@ -682,11 +712,20 @@ open func step(userInput: String)throws  -> AgentResponse {
     
 open func stepWithAllowedTools(userInput: String, allowedTools: [String])throws  -> AgentResponse {
     return try  FfiConverterTypeAgentResponse.lift(try rustCallWithError(FfiConverterTypeAgentError.lift) {
-    uniffi_kessel_core_fn_method_agent_step_with_allowed_tools(self.uniffiClonePointer(),
+    uniffi_voice_agent_core_fn_method_agent_step_with_allowed_tools(self.uniffiClonePointer(),
         FfiConverterString.lower(userInput),
         FfiConverterSequenceString.lower(allowedTools),$0
     )
 })
+}
+    
+open func submitCaptureResult(id: String, imageBase64: String, metadataJson: String) {try! rustCall() {
+    uniffi_voice_agent_core_fn_method_agent_submit_capture_result(self.uniffiClonePointer(),
+        FfiConverterString.lower(id),
+        FfiConverterString.lower(imageBase64),
+        FfiConverterString.lower(metadataJson),$0
+    )
+}
 }
     
 
@@ -744,6 +783,184 @@ public func FfiConverterTypeAgent_lower(_ value: Agent) -> UnsafeMutableRawPoint
 }
 
 
+
+
+public protocol MutationApprover : AnyObject {
+    
+    func approve(action: String, target: String)  -> ApprovalDecision
+    
+}
+
+open class MutationApproverImpl:
+    MutationApprover {
+    fileprivate let pointer: UnsafeMutableRawPointer!
+
+    /// Used to instantiate a [FFIObject] without an actual pointer, for fakes in tests, mostly.
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    public struct NoPointer {
+        public init() {}
+    }
+
+    // TODO: We'd like this to be `private` but for Swifty reasons,
+    // we can't implement `FfiConverter` without making this `required` and we can't
+    // make it `required` without making it `public`.
+    required public init(unsafeFromRawPointer pointer: UnsafeMutableRawPointer) {
+        self.pointer = pointer
+    }
+
+    // This constructor can be used to instantiate a fake object.
+    // - Parameter noPointer: Placeholder value so we can have a constructor separate from the default empty one that may be implemented for classes extending [FFIObject].
+    //
+    // - Warning:
+    //     Any object instantiated with this constructor cannot be passed to an actual Rust-backed object. Since there isn't a backing [Pointer] the FFI lower functions will crash.
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    public init(noPointer: NoPointer) {
+        self.pointer = nil
+    }
+
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    public func uniffiClonePointer() -> UnsafeMutableRawPointer {
+        return try! rustCall { uniffi_voice_agent_core_fn_clone_mutationapprover(self.pointer, $0) }
+    }
+    // No primary constructor declared for this class.
+
+    deinit {
+        guard let pointer = pointer else {
+            return
+        }
+
+        try! rustCall { uniffi_voice_agent_core_fn_free_mutationapprover(pointer, $0) }
+    }
+
+    
+
+    
+open func approve(action: String, target: String) -> ApprovalDecision {
+    return try!  FfiConverterTypeApprovalDecision.lift(try! rustCall() {
+    uniffi_voice_agent_core_fn_method_mutationapprover_approve(self.uniffiClonePointer(),
+        FfiConverterString.lower(action),
+        FfiConverterString.lower(target),$0
+    )
+})
+}
+    
+
+}
+// Magic number for the Rust proxy to call using the same mechanism as every other method,
+// to free the callback once it's dropped by Rust.
+private let IDX_CALLBACK_FREE: Int32 = 0
+// Callback return codes
+private let UNIFFI_CALLBACK_SUCCESS: Int32 = 0
+private let UNIFFI_CALLBACK_ERROR: Int32 = 1
+private let UNIFFI_CALLBACK_UNEXPECTED_ERROR: Int32 = 2
+
+// Put the implementation in a struct so we don't pollute the top-level namespace
+fileprivate struct UniffiCallbackInterfaceMutationApprover {
+
+    // Create the VTable using a series of closures.
+    // Swift automatically converts these into C callback functions.
+    static var vtable: UniffiVTableCallbackInterfaceMutationApprover = UniffiVTableCallbackInterfaceMutationApprover(
+        approve: { (
+            uniffiHandle: UInt64,
+            action: RustBuffer,
+            target: RustBuffer,
+            uniffiOutReturn: UnsafeMutablePointer<RustBuffer>,
+            uniffiCallStatus: UnsafeMutablePointer<RustCallStatus>
+        ) in
+            let makeCall = {
+                () throws -> ApprovalDecision in
+                guard let uniffiObj = try? FfiConverterTypeMutationApprover.handleMap.get(handle: uniffiHandle) else {
+                    throw UniffiInternalError.unexpectedStaleHandle
+                }
+                return uniffiObj.approve(
+                     action: try FfiConverterString.lift(action),
+                     target: try FfiConverterString.lift(target)
+                )
+            }
+
+            
+            let writeReturn = { uniffiOutReturn.pointee = FfiConverterTypeApprovalDecision.lower($0) }
+            uniffiTraitInterfaceCall(
+                callStatus: uniffiCallStatus,
+                makeCall: makeCall,
+                writeReturn: writeReturn
+            )
+        },
+        uniffiFree: { (uniffiHandle: UInt64) -> () in
+            let result = try? FfiConverterTypeMutationApprover.handleMap.remove(handle: uniffiHandle)
+            if result == nil {
+                print("Uniffi callback interface MutationApprover: handle missing in uniffiFree")
+            }
+        }
+    )
+}
+
+private func uniffiCallbackInitMutationApprover() {
+    uniffi_voice_agent_core_fn_init_callback_vtable_mutationapprover(&UniffiCallbackInterfaceMutationApprover.vtable)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeMutationApprover: FfiConverter {
+    fileprivate static var handleMap = UniffiHandleMap<MutationApprover>()
+
+    typealias FfiType = UnsafeMutableRawPointer
+    typealias SwiftType = MutationApprover
+
+    public static func lift(_ pointer: UnsafeMutableRawPointer) throws -> MutationApprover {
+        return MutationApproverImpl(unsafeFromRawPointer: pointer)
+    }
+
+    public static func lower(_ value: MutationApprover) -> UnsafeMutableRawPointer {
+        guard let ptr = UnsafeMutableRawPointer(bitPattern: UInt(truncatingIfNeeded: handleMap.insert(obj: value))) else {
+            fatalError("Cast to UnsafeMutableRawPointer failed")
+        }
+        return ptr
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> MutationApprover {
+        let v: UInt64 = try readInt(&buf)
+        // The Rust code won't compile if a pointer won't fit in a UInt64.
+        // We have to go via `UInt` because that's the thing that's the size of a pointer.
+        let ptr = UnsafeMutableRawPointer(bitPattern: UInt(truncatingIfNeeded: v))
+        if (ptr == nil) {
+            throw UniffiInternalError.unexpectedNullPointer
+        }
+        return try lift(ptr!)
+    }
+
+    public static func write(_ value: MutationApprover, into buf: inout [UInt8]) {
+        // This fiddling is because `Int` is the thing that's the same size as a pointer.
+        // The Rust code won't compile if a pointer won't fit in a `UInt64`.
+        writeInt(&buf, UInt64(bitPattern: Int64(Int(bitPattern: lower(value)))))
+    }
+}
+
+
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeMutationApprover_lift(_ pointer: UnsafeMutableRawPointer) throws -> MutationApprover {
+    return try FfiConverterTypeMutationApprover.lift(pointer)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeMutationApprover_lower(_ value: MutationApprover) -> UnsafeMutableRawPointer {
+    return FfiConverterTypeMutationApprover.lower(value)
+}
+
+
 public struct AgentConfig {
     public var modelPath: String?
     public var baseUrl: String
@@ -752,14 +969,16 @@ public struct AgentConfig {
     public var useHarmonyTemplate: Bool
     public var temperature: Float?
     public var maxTokens: UInt32
+    public var contextWindow: UInt32
     public var language: String?
     public var workingDir: String?
     public var reasoningEffort: String?
-    public var watcherDebounceSecs: Double?
+    public var inferenceEngine: String?
+    public var mcpServers: [McpServerConfig]
 
     // Default memberwise initializers are never public by default, so we
     // declare one manually.
-    public init(modelPath: String?, baseUrl: String, model: String, apiKey: String?, useHarmonyTemplate: Bool, temperature: Float?, maxTokens: UInt32, language: String?, workingDir: String?, reasoningEffort: String?, watcherDebounceSecs: Double?) {
+    public init(modelPath: String?, baseUrl: String, model: String, apiKey: String?, useHarmonyTemplate: Bool, temperature: Float?, maxTokens: UInt32, contextWindow: UInt32, language: String?, workingDir: String?, reasoningEffort: String?, inferenceEngine: String?, mcpServers: [McpServerConfig]) {
         self.modelPath = modelPath
         self.baseUrl = baseUrl
         self.model = model
@@ -767,10 +986,12 @@ public struct AgentConfig {
         self.useHarmonyTemplate = useHarmonyTemplate
         self.temperature = temperature
         self.maxTokens = maxTokens
+        self.contextWindow = contextWindow
         self.language = language
         self.workingDir = workingDir
         self.reasoningEffort = reasoningEffort
-        self.watcherDebounceSecs = watcherDebounceSecs
+        self.inferenceEngine = inferenceEngine
+        self.mcpServers = mcpServers
     }
 }
 
@@ -799,6 +1020,9 @@ extension AgentConfig: Equatable, Hashable {
         if lhs.maxTokens != rhs.maxTokens {
             return false
         }
+        if lhs.contextWindow != rhs.contextWindow {
+            return false
+        }
         if lhs.language != rhs.language {
             return false
         }
@@ -808,7 +1032,10 @@ extension AgentConfig: Equatable, Hashable {
         if lhs.reasoningEffort != rhs.reasoningEffort {
             return false
         }
-        if lhs.watcherDebounceSecs != rhs.watcherDebounceSecs {
+        if lhs.inferenceEngine != rhs.inferenceEngine {
+            return false
+        }
+        if lhs.mcpServers != rhs.mcpServers {
             return false
         }
         return true
@@ -822,10 +1049,12 @@ extension AgentConfig: Equatable, Hashable {
         hasher.combine(useHarmonyTemplate)
         hasher.combine(temperature)
         hasher.combine(maxTokens)
+        hasher.combine(contextWindow)
         hasher.combine(language)
         hasher.combine(workingDir)
         hasher.combine(reasoningEffort)
-        hasher.combine(watcherDebounceSecs)
+        hasher.combine(inferenceEngine)
+        hasher.combine(mcpServers)
     }
 }
 
@@ -844,10 +1073,12 @@ public struct FfiConverterTypeAgentConfig: FfiConverterRustBuffer {
                 useHarmonyTemplate: FfiConverterBool.read(from: &buf), 
                 temperature: FfiConverterOptionFloat.read(from: &buf), 
                 maxTokens: FfiConverterUInt32.read(from: &buf), 
+                contextWindow: FfiConverterUInt32.read(from: &buf), 
                 language: FfiConverterOptionString.read(from: &buf), 
                 workingDir: FfiConverterOptionString.read(from: &buf), 
                 reasoningEffort: FfiConverterOptionString.read(from: &buf), 
-                watcherDebounceSecs: FfiConverterOptionDouble.read(from: &buf)
+                inferenceEngine: FfiConverterOptionString.read(from: &buf), 
+                mcpServers: FfiConverterSequenceTypeMcpServerConfig.read(from: &buf)
         )
     }
 
@@ -859,10 +1090,12 @@ public struct FfiConverterTypeAgentConfig: FfiConverterRustBuffer {
         FfiConverterBool.write(value.useHarmonyTemplate, into: &buf)
         FfiConverterOptionFloat.write(value.temperature, into: &buf)
         FfiConverterUInt32.write(value.maxTokens, into: &buf)
+        FfiConverterUInt32.write(value.contextWindow, into: &buf)
         FfiConverterOptionString.write(value.language, into: &buf)
         FfiConverterOptionString.write(value.workingDir, into: &buf)
         FfiConverterOptionString.write(value.reasoningEffort, into: &buf)
-        FfiConverterOptionDouble.write(value.watcherDebounceSecs, into: &buf)
+        FfiConverterOptionString.write(value.inferenceEngine, into: &buf)
+        FfiConverterSequenceTypeMcpServerConfig.write(value.mcpServers, into: &buf)
     }
 }
 
@@ -888,15 +1121,25 @@ public struct AgentResponse {
     public var isFinal: Bool
     public var keywords: [String]?
     public var reasoning: String?
+    public var inputTokens: UInt64
+    public var outputTokens: UInt64
+    public var totalTokens: UInt64
+    public var contextPercent: Float
+    public var suggestedNextCheckSeconds: UInt32?
 
     // Default memberwise initializers are never public by default, so we
     // declare one manually.
-    public init(content: String, role: String, isFinal: Bool, keywords: [String]?, reasoning: String?) {
+    public init(content: String, role: String, isFinal: Bool, keywords: [String]?, reasoning: String?, inputTokens: UInt64, outputTokens: UInt64, totalTokens: UInt64, contextPercent: Float, suggestedNextCheckSeconds: UInt32?) {
         self.content = content
         self.role = role
         self.isFinal = isFinal
         self.keywords = keywords
         self.reasoning = reasoning
+        self.inputTokens = inputTokens
+        self.outputTokens = outputTokens
+        self.totalTokens = totalTokens
+        self.contextPercent = contextPercent
+        self.suggestedNextCheckSeconds = suggestedNextCheckSeconds
     }
 }
 
@@ -919,6 +1162,21 @@ extension AgentResponse: Equatable, Hashable {
         if lhs.reasoning != rhs.reasoning {
             return false
         }
+        if lhs.inputTokens != rhs.inputTokens {
+            return false
+        }
+        if lhs.outputTokens != rhs.outputTokens {
+            return false
+        }
+        if lhs.totalTokens != rhs.totalTokens {
+            return false
+        }
+        if lhs.contextPercent != rhs.contextPercent {
+            return false
+        }
+        if lhs.suggestedNextCheckSeconds != rhs.suggestedNextCheckSeconds {
+            return false
+        }
         return true
     }
 
@@ -928,6 +1186,11 @@ extension AgentResponse: Equatable, Hashable {
         hasher.combine(isFinal)
         hasher.combine(keywords)
         hasher.combine(reasoning)
+        hasher.combine(inputTokens)
+        hasher.combine(outputTokens)
+        hasher.combine(totalTokens)
+        hasher.combine(contextPercent)
+        hasher.combine(suggestedNextCheckSeconds)
     }
 }
 
@@ -943,7 +1206,12 @@ public struct FfiConverterTypeAgentResponse: FfiConverterRustBuffer {
                 role: FfiConverterString.read(from: &buf), 
                 isFinal: FfiConverterBool.read(from: &buf), 
                 keywords: FfiConverterOptionSequenceString.read(from: &buf), 
-                reasoning: FfiConverterOptionString.read(from: &buf)
+                reasoning: FfiConverterOptionString.read(from: &buf), 
+                inputTokens: FfiConverterUInt64.read(from: &buf), 
+                outputTokens: FfiConverterUInt64.read(from: &buf), 
+                totalTokens: FfiConverterUInt64.read(from: &buf), 
+                contextPercent: FfiConverterFloat.read(from: &buf), 
+                suggestedNextCheckSeconds: FfiConverterOptionUInt32.read(from: &buf)
         )
     }
 
@@ -953,6 +1221,11 @@ public struct FfiConverterTypeAgentResponse: FfiConverterRustBuffer {
         FfiConverterBool.write(value.isFinal, into: &buf)
         FfiConverterOptionSequenceString.write(value.keywords, into: &buf)
         FfiConverterOptionString.write(value.reasoning, into: &buf)
+        FfiConverterUInt64.write(value.inputTokens, into: &buf)
+        FfiConverterUInt64.write(value.outputTokens, into: &buf)
+        FfiConverterUInt64.write(value.totalTokens, into: &buf)
+        FfiConverterFloat.write(value.contextPercent, into: &buf)
+        FfiConverterOptionUInt32.write(value.suggestedNextCheckSeconds, into: &buf)
     }
 }
 
@@ -972,34 +1245,76 @@ public func FfiConverterTypeAgentResponse_lower(_ value: AgentResponse) -> RustB
 }
 
 
-public struct EventSummary {
-    public var text: String
-    public var priority: EventPriority
+public struct CaptureRequest {
+    public var id: String
+    public var windowId: UInt32?
+    public var cropX: Double?
+    public var cropY: Double?
+    public var cropW: Double?
+    public var cropH: Double?
+    public var detect: Bool?
+    public var applyOcr: Bool?
+    public var searchKeywords: String?
 
     // Default memberwise initializers are never public by default, so we
     // declare one manually.
-    public init(text: String, priority: EventPriority) {
-        self.text = text
-        self.priority = priority
+    public init(id: String, windowId: UInt32?, cropX: Double?, cropY: Double?, cropW: Double?, cropH: Double?, detect: Bool?, applyOcr: Bool?, searchKeywords: String?) {
+        self.id = id
+        self.windowId = windowId
+        self.cropX = cropX
+        self.cropY = cropY
+        self.cropW = cropW
+        self.cropH = cropH
+        self.detect = detect
+        self.applyOcr = applyOcr
+        self.searchKeywords = searchKeywords
     }
 }
 
 
 
-extension EventSummary: Equatable, Hashable {
-    public static func ==(lhs: EventSummary, rhs: EventSummary) -> Bool {
-        if lhs.text != rhs.text {
+extension CaptureRequest: Equatable, Hashable {
+    public static func ==(lhs: CaptureRequest, rhs: CaptureRequest) -> Bool {
+        if lhs.id != rhs.id {
             return false
         }
-        if lhs.priority != rhs.priority {
+        if lhs.windowId != rhs.windowId {
+            return false
+        }
+        if lhs.cropX != rhs.cropX {
+            return false
+        }
+        if lhs.cropY != rhs.cropY {
+            return false
+        }
+        if lhs.cropW != rhs.cropW {
+            return false
+        }
+        if lhs.cropH != rhs.cropH {
+            return false
+        }
+        if lhs.detect != rhs.detect {
+            return false
+        }
+        if lhs.applyOcr != rhs.applyOcr {
+            return false
+        }
+        if lhs.searchKeywords != rhs.searchKeywords {
             return false
         }
         return true
     }
 
     public func hash(into hasher: inout Hasher) {
-        hasher.combine(text)
-        hasher.combine(priority)
+        hasher.combine(id)
+        hasher.combine(windowId)
+        hasher.combine(cropX)
+        hasher.combine(cropY)
+        hasher.combine(cropW)
+        hasher.combine(cropH)
+        hasher.combine(detect)
+        hasher.combine(applyOcr)
+        hasher.combine(searchKeywords)
     }
 }
 
@@ -1007,18 +1322,32 @@ extension EventSummary: Equatable, Hashable {
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
-public struct FfiConverterTypeEventSummary: FfiConverterRustBuffer {
-    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> EventSummary {
+public struct FfiConverterTypeCaptureRequest: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> CaptureRequest {
         return
-            try EventSummary(
-                text: FfiConverterString.read(from: &buf), 
-                priority: FfiConverterTypeEventPriority.read(from: &buf)
+            try CaptureRequest(
+                id: FfiConverterString.read(from: &buf), 
+                windowId: FfiConverterOptionUInt32.read(from: &buf), 
+                cropX: FfiConverterOptionDouble.read(from: &buf), 
+                cropY: FfiConverterOptionDouble.read(from: &buf), 
+                cropW: FfiConverterOptionDouble.read(from: &buf), 
+                cropH: FfiConverterOptionDouble.read(from: &buf), 
+                detect: FfiConverterOptionBool.read(from: &buf), 
+                applyOcr: FfiConverterOptionBool.read(from: &buf), 
+                searchKeywords: FfiConverterOptionString.read(from: &buf)
         )
     }
 
-    public static func write(_ value: EventSummary, into buf: inout [UInt8]) {
-        FfiConverterString.write(value.text, into: &buf)
-        FfiConverterTypeEventPriority.write(value.priority, into: &buf)
+    public static func write(_ value: CaptureRequest, into buf: inout [UInt8]) {
+        FfiConverterString.write(value.id, into: &buf)
+        FfiConverterOptionUInt32.write(value.windowId, into: &buf)
+        FfiConverterOptionDouble.write(value.cropX, into: &buf)
+        FfiConverterOptionDouble.write(value.cropY, into: &buf)
+        FfiConverterOptionDouble.write(value.cropW, into: &buf)
+        FfiConverterOptionDouble.write(value.cropH, into: &buf)
+        FfiConverterOptionBool.write(value.detect, into: &buf)
+        FfiConverterOptionBool.write(value.applyOcr, into: &buf)
+        FfiConverterOptionString.write(value.searchKeywords, into: &buf)
     }
 }
 
@@ -1026,15 +1355,237 @@ public struct FfiConverterTypeEventSummary: FfiConverterRustBuffer {
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
-public func FfiConverterTypeEventSummary_lift(_ buf: RustBuffer) throws -> EventSummary {
-    return try FfiConverterTypeEventSummary.lift(buf)
+public func FfiConverterTypeCaptureRequest_lift(_ buf: RustBuffer) throws -> CaptureRequest {
+    return try FfiConverterTypeCaptureRequest.lift(buf)
 }
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
-public func FfiConverterTypeEventSummary_lower(_ value: EventSummary) -> RustBuffer {
-    return FfiConverterTypeEventSummary.lower(value)
+public func FfiConverterTypeCaptureRequest_lower(_ value: CaptureRequest) -> RustBuffer {
+    return FfiConverterTypeCaptureRequest.lower(value)
+}
+
+
+public struct GoalEvaluation {
+    public var met: Bool
+    public var reason: String
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(met: Bool, reason: String) {
+        self.met = met
+        self.reason = reason
+    }
+}
+
+
+
+extension GoalEvaluation: Equatable, Hashable {
+    public static func ==(lhs: GoalEvaluation, rhs: GoalEvaluation) -> Bool {
+        if lhs.met != rhs.met {
+            return false
+        }
+        if lhs.reason != rhs.reason {
+            return false
+        }
+        return true
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(met)
+        hasher.combine(reason)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeGoalEvaluation: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> GoalEvaluation {
+        return
+            try GoalEvaluation(
+                met: FfiConverterBool.read(from: &buf), 
+                reason: FfiConverterString.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: GoalEvaluation, into buf: inout [UInt8]) {
+        FfiConverterBool.write(value.met, into: &buf)
+        FfiConverterString.write(value.reason, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeGoalEvaluation_lift(_ buf: RustBuffer) throws -> GoalEvaluation {
+    return try FfiConverterTypeGoalEvaluation.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeGoalEvaluation_lower(_ value: GoalEvaluation) -> RustBuffer {
+    return FfiConverterTypeGoalEvaluation.lower(value)
+}
+
+
+public struct GoalStatus {
+    public var condition: String
+    public var elapsedSeconds: UInt64
+    public var turnsEvaluated: UInt32
+    public var lastReason: String?
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(condition: String, elapsedSeconds: UInt64, turnsEvaluated: UInt32, lastReason: String?) {
+        self.condition = condition
+        self.elapsedSeconds = elapsedSeconds
+        self.turnsEvaluated = turnsEvaluated
+        self.lastReason = lastReason
+    }
+}
+
+
+
+extension GoalStatus: Equatable, Hashable {
+    public static func ==(lhs: GoalStatus, rhs: GoalStatus) -> Bool {
+        if lhs.condition != rhs.condition {
+            return false
+        }
+        if lhs.elapsedSeconds != rhs.elapsedSeconds {
+            return false
+        }
+        if lhs.turnsEvaluated != rhs.turnsEvaluated {
+            return false
+        }
+        if lhs.lastReason != rhs.lastReason {
+            return false
+        }
+        return true
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(condition)
+        hasher.combine(elapsedSeconds)
+        hasher.combine(turnsEvaluated)
+        hasher.combine(lastReason)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeGoalStatus: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> GoalStatus {
+        return
+            try GoalStatus(
+                condition: FfiConverterString.read(from: &buf), 
+                elapsedSeconds: FfiConverterUInt64.read(from: &buf), 
+                turnsEvaluated: FfiConverterUInt32.read(from: &buf), 
+                lastReason: FfiConverterOptionString.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: GoalStatus, into buf: inout [UInt8]) {
+        FfiConverterString.write(value.condition, into: &buf)
+        FfiConverterUInt64.write(value.elapsedSeconds, into: &buf)
+        FfiConverterUInt32.write(value.turnsEvaluated, into: &buf)
+        FfiConverterOptionString.write(value.lastReason, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeGoalStatus_lift(_ buf: RustBuffer) throws -> GoalStatus {
+    return try FfiConverterTypeGoalStatus.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeGoalStatus_lower(_ value: GoalStatus) -> RustBuffer {
+    return FfiConverterTypeGoalStatus.lower(value)
+}
+
+
+public struct McpServerConfig {
+    public var command: String
+    public var args: [String]
+    public var url: String?
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(command: String, args: [String], url: String?) {
+        self.command = command
+        self.args = args
+        self.url = url
+    }
+}
+
+
+
+extension McpServerConfig: Equatable, Hashable {
+    public static func ==(lhs: McpServerConfig, rhs: McpServerConfig) -> Bool {
+        if lhs.command != rhs.command {
+            return false
+        }
+        if lhs.args != rhs.args {
+            return false
+        }
+        if lhs.url != rhs.url {
+            return false
+        }
+        return true
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(command)
+        hasher.combine(args)
+        hasher.combine(url)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeMcpServerConfig: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> McpServerConfig {
+        return
+            try McpServerConfig(
+                command: FfiConverterString.read(from: &buf), 
+                args: FfiConverterSequenceString.read(from: &buf), 
+                url: FfiConverterOptionString.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: McpServerConfig, into buf: inout [UInt8]) {
+        FfiConverterString.write(value.command, into: &buf)
+        FfiConverterSequenceString.write(value.args, into: &buf)
+        FfiConverterOptionString.write(value.url, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeMcpServerConfig_lift(_ buf: RustBuffer) throws -> McpServerConfig {
+    return try FfiConverterTypeMcpServerConfig.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeMcpServerConfig_lower(_ value: McpServerConfig) -> RustBuffer {
+    return FfiConverterTypeMcpServerConfig.lower(value)
 }
 
 
@@ -1119,41 +1670,48 @@ extension AgentError: Foundation.LocalizedError {
 // Note that we don't yet support `indirect` for enums.
 // See https://github.com/mozilla/uniffi-rs/issues/396 for further discussion.
 
-public enum EventPriority {
+public enum ApprovalDecision {
     
-    case high
-    case normal
+    case allowOnce
+    case allowSession
+    case deny
 }
 
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
-public struct FfiConverterTypeEventPriority: FfiConverterRustBuffer {
-    typealias SwiftType = EventPriority
+public struct FfiConverterTypeApprovalDecision: FfiConverterRustBuffer {
+    typealias SwiftType = ApprovalDecision
 
-    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> EventPriority {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> ApprovalDecision {
         let variant: Int32 = try readInt(&buf)
         switch variant {
         
-        case 1: return .high
+        case 1: return .allowOnce
         
-        case 2: return .normal
+        case 2: return .allowSession
+        
+        case 3: return .deny
         
         default: throw UniffiInternalError.unexpectedEnumCase
         }
     }
 
-    public static func write(_ value: EventPriority, into buf: inout [UInt8]) {
+    public static func write(_ value: ApprovalDecision, into buf: inout [UInt8]) {
         switch value {
         
         
-        case .high:
+        case .allowOnce:
             writeInt(&buf, Int32(1))
         
         
-        case .normal:
+        case .allowSession:
             writeInt(&buf, Int32(2))
+        
+        
+        case .deny:
+            writeInt(&buf, Int32(3))
         
         }
     }
@@ -1163,22 +1721,46 @@ public struct FfiConverterTypeEventPriority: FfiConverterRustBuffer {
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
-public func FfiConverterTypeEventPriority_lift(_ buf: RustBuffer) throws -> EventPriority {
-    return try FfiConverterTypeEventPriority.lift(buf)
+public func FfiConverterTypeApprovalDecision_lift(_ buf: RustBuffer) throws -> ApprovalDecision {
+    return try FfiConverterTypeApprovalDecision.lift(buf)
 }
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
-public func FfiConverterTypeEventPriority_lower(_ value: EventPriority) -> RustBuffer {
-    return FfiConverterTypeEventPriority.lower(value)
+public func FfiConverterTypeApprovalDecision_lower(_ value: ApprovalDecision) -> RustBuffer {
+    return FfiConverterTypeApprovalDecision.lower(value)
 }
 
 
 
-extension EventPriority: Equatable, Hashable {}
+extension ApprovalDecision: Equatable, Hashable {}
 
 
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+fileprivate struct FfiConverterOptionUInt32: FfiConverterRustBuffer {
+    typealias SwiftType = UInt32?
+
+    public static func write(_ value: SwiftType, into buf: inout [UInt8]) {
+        guard let value = value else {
+            writeInt(&buf, Int8(0))
+            return
+        }
+        writeInt(&buf, Int8(1))
+        FfiConverterUInt32.write(value, into: &buf)
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SwiftType {
+        switch try readInt(&buf) as Int8 {
+        case 0: return nil
+        case 1: return try FfiConverterUInt32.read(from: &buf)
+        default: throw UniffiInternalError.unexpectedOptionalTag
+        }
+    }
+}
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -1231,6 +1813,30 @@ fileprivate struct FfiConverterOptionDouble: FfiConverterRustBuffer {
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
+fileprivate struct FfiConverterOptionBool: FfiConverterRustBuffer {
+    typealias SwiftType = Bool?
+
+    public static func write(_ value: SwiftType, into buf: inout [UInt8]) {
+        guard let value = value else {
+            writeInt(&buf, Int8(0))
+            return
+        }
+        writeInt(&buf, Int8(1))
+        FfiConverterBool.write(value, into: &buf)
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SwiftType {
+        switch try readInt(&buf) as Int8 {
+        case 0: return nil
+        case 1: return try FfiConverterBool.read(from: &buf)
+        default: throw UniffiInternalError.unexpectedOptionalTag
+        }
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
 fileprivate struct FfiConverterOptionString: FfiConverterRustBuffer {
     typealias SwiftType = String?
 
@@ -1247,6 +1853,54 @@ fileprivate struct FfiConverterOptionString: FfiConverterRustBuffer {
         switch try readInt(&buf) as Int8 {
         case 0: return nil
         case 1: return try FfiConverterString.read(from: &buf)
+        default: throw UniffiInternalError.unexpectedOptionalTag
+        }
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+fileprivate struct FfiConverterOptionTypeMutationApprover: FfiConverterRustBuffer {
+    typealias SwiftType = MutationApprover?
+
+    public static func write(_ value: SwiftType, into buf: inout [UInt8]) {
+        guard let value = value else {
+            writeInt(&buf, Int8(0))
+            return
+        }
+        writeInt(&buf, Int8(1))
+        FfiConverterTypeMutationApprover.write(value, into: &buf)
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SwiftType {
+        switch try readInt(&buf) as Int8 {
+        case 0: return nil
+        case 1: return try FfiConverterTypeMutationApprover.read(from: &buf)
+        default: throw UniffiInternalError.unexpectedOptionalTag
+        }
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+fileprivate struct FfiConverterOptionTypeGoalStatus: FfiConverterRustBuffer {
+    typealias SwiftType = GoalStatus?
+
+    public static func write(_ value: SwiftType, into buf: inout [UInt8]) {
+        guard let value = value else {
+            writeInt(&buf, Int8(0))
+            return
+        }
+        writeInt(&buf, Int8(1))
+        FfiConverterTypeGoalStatus.write(value, into: &buf)
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SwiftType {
+        switch try readInt(&buf) as Int8 {
+        case 0: return nil
+        case 1: return try FfiConverterTypeGoalStatus.read(from: &buf)
         default: throw UniffiInternalError.unexpectedOptionalTag
         }
     }
@@ -1304,31 +1958,57 @@ fileprivate struct FfiConverterSequenceString: FfiConverterRustBuffer {
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
-fileprivate struct FfiConverterSequenceTypeEventSummary: FfiConverterRustBuffer {
-    typealias SwiftType = [EventSummary]
+fileprivate struct FfiConverterSequenceTypeCaptureRequest: FfiConverterRustBuffer {
+    typealias SwiftType = [CaptureRequest]
 
-    public static func write(_ value: [EventSummary], into buf: inout [UInt8]) {
+    public static func write(_ value: [CaptureRequest], into buf: inout [UInt8]) {
         let len = Int32(value.count)
         writeInt(&buf, len)
         for item in value {
-            FfiConverterTypeEventSummary.write(item, into: &buf)
+            FfiConverterTypeCaptureRequest.write(item, into: &buf)
         }
     }
 
-    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> [EventSummary] {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> [CaptureRequest] {
         let len: Int32 = try readInt(&buf)
-        var seq = [EventSummary]()
+        var seq = [CaptureRequest]()
         seq.reserveCapacity(Int(len))
         for _ in 0 ..< len {
-            seq.append(try FfiConverterTypeEventSummary.read(from: &buf))
+            seq.append(try FfiConverterTypeCaptureRequest.read(from: &buf))
         }
         return seq
     }
 }
-public func agentNew(config: AgentConfig)throws  -> Agent {
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+fileprivate struct FfiConverterSequenceTypeMcpServerConfig: FfiConverterRustBuffer {
+    typealias SwiftType = [McpServerConfig]
+
+    public static func write(_ value: [McpServerConfig], into buf: inout [UInt8]) {
+        let len = Int32(value.count)
+        writeInt(&buf, len)
+        for item in value {
+            FfiConverterTypeMcpServerConfig.write(item, into: &buf)
+        }
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> [McpServerConfig] {
+        let len: Int32 = try readInt(&buf)
+        var seq = [McpServerConfig]()
+        seq.reserveCapacity(Int(len))
+        for _ in 0 ..< len {
+            seq.append(try FfiConverterTypeMcpServerConfig.read(from: &buf))
+        }
+        return seq
+    }
+}
+public func agentNew(config: AgentConfig, approver: MutationApprover?)throws  -> Agent {
     return try  FfiConverterTypeAgent.lift(try rustCallWithError(FfiConverterTypeAgentError.lift) {
-    uniffi_kessel_core_fn_func_agent_new(
-        FfiConverterTypeAgentConfig.lower(config),$0
+    uniffi_voice_agent_core_fn_func_agent_new(
+        FfiConverterTypeAgentConfig.lower(config),
+        FfiConverterOptionTypeMutationApprover.lower(approver),$0
     )
 })
 }
@@ -1344,47 +2024,63 @@ private var initializationResult: InitializationResult = {
     // Get the bindings contract version from our ComponentInterface
     let bindings_contract_version = 26
     // Get the scaffolding contract version by calling the into the dylib
-    let scaffolding_contract_version = ffi_kessel_core_uniffi_contract_version()
+    let scaffolding_contract_version = ffi_voice_agent_core_uniffi_contract_version()
     if bindings_contract_version != scaffolding_contract_version {
         return InitializationResult.contractVersionMismatch
     }
-    if (uniffi_kessel_core_checksum_func_agent_new() != 12003) {
+    if (uniffi_voice_agent_core_checksum_func_agent_new() != 53214) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_kessel_core_checksum_method_agent_add_skill() != 41357) {
+    if (uniffi_voice_agent_core_checksum_method_agent_add_skill() != 34521) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_kessel_core_checksum_method_agent_chat_once() != 37266) {
+    if (uniffi_voice_agent_core_checksum_method_agent_clear_goal() != 65305) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_kessel_core_checksum_method_agent_drain_watcher_summaries() != 63735) {
+    if (uniffi_voice_agent_core_checksum_method_agent_drain_capture_requests() != 44042) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_kessel_core_checksum_method_agent_feed_user_speech() != 40752) {
+    if (uniffi_voice_agent_core_checksum_method_agent_evaluate_goal() != 30302) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_kessel_core_checksum_method_agent_feed_watcher_event() != 59668) {
+    if (uniffi_voice_agent_core_checksum_method_agent_get_conversation_history() != 47941) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_kessel_core_checksum_method_agent_get_conversation_history() != 59460) {
+    if (uniffi_voice_agent_core_checksum_method_agent_goal_status() != 57962) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_kessel_core_checksum_method_agent_process_backchannel() != 8364) {
+    if (uniffi_voice_agent_core_checksum_method_agent_observe() != 40) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_kessel_core_checksum_method_agent_reset() != 29830) {
+    if (uniffi_voice_agent_core_checksum_method_agent_process_backchannel() != 27285) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_kessel_core_checksum_method_agent_set_system_prompt() != 12711) {
+    if (uniffi_voice_agent_core_checksum_method_agent_push_situation_message() != 40141) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_kessel_core_checksum_method_agent_step() != 4924) {
+    if (uniffi_voice_agent_core_checksum_method_agent_reset() != 27753) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_kessel_core_checksum_method_agent_step_with_allowed_tools() != 47034) {
+    if (uniffi_voice_agent_core_checksum_method_agent_set_goal() != 25318) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_voice_agent_core_checksum_method_agent_set_system_prompt() != 60393) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_voice_agent_core_checksum_method_agent_step() != 17531) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_voice_agent_core_checksum_method_agent_step_with_allowed_tools() != 5365) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_voice_agent_core_checksum_method_agent_submit_capture_result() != 11728) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_voice_agent_core_checksum_method_mutationapprover_approve() != 4961) {
         return InitializationResult.apiChecksumMismatch
     }
 
+    uniffiCallbackInitMutationApprover()
     return InitializationResult.ok
 }()
 

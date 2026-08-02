@@ -1,4 +1,4 @@
-module kessel_coreFFI {
-    header "kessel_coreFFI.h"
+module voice_agent_coreFFI {
+    header "voice_agent_coreFFI.h"
     export *
 }

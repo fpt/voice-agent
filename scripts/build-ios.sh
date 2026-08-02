@@ -1,8 +1,8 @@
 #!/bin/bash
-# Build Rust kessel_core for iOS (device + simulator).
-# Produces an XCFramework at swift/AgentApp/kessel_core.xcframework
+# Build Rust voice_agent_core for iOS (device + simulator).
+# Produces an XCFramework at swift/AgentApp/voice_agent_core.xcframework
 #
-# kessel is a pure ACP client (no in-process inference), so the core has no
+# voice-agent is a pure ACP client (no in-process inference), so the core has no
 # feature flags — one build covers every target.
 #
 # Usage: bash scripts/build-ios.sh
@@ -16,7 +16,7 @@ CRATES_DIR="$ROOT_DIR/crates"
 OUTPUT_DIR="$ROOT_DIR/swift/AgentApp"
 CARGO_TOML="$CRATES_DIR/lib/Cargo.toml"
 
-echo "Building kessel_core for iOS..."
+echo "Building voice_agent_core for iOS..."
 
 # Temporarily remove cdylib from crate-type (iOS cross-link fails for dylibs
 # due to libc++ tbd stub mismatch in Xcode 26 beta).
@@ -31,25 +31,25 @@ export IPHONEOS_DEPLOYMENT_TARGET=26.2
 echo "  [1/3] Building for iOS device (aarch64-apple-ios)..."
 cd "$CRATES_DIR"
 SDKROOT=$(xcrun --sdk iphoneos --show-sdk-path) \
-    cargo build -p kessel-core --release \
+    cargo build -p voice-agent-core --release \
     --target aarch64-apple-ios 2>&1 | tail -3
 
 # Build for simulator (aarch64-apple-ios-sim)
 echo "  [2/3] Building for iOS simulator (aarch64-apple-ios-sim)..."
 SDKROOT=$(xcrun --sdk iphonesimulator --show-sdk-path) \
-    cargo build -p kessel-core --release \
+    cargo build -p voice-agent-core --release \
     --target aarch64-apple-ios-sim 2>&1 | tail -3
 
 # Create XCFramework
 echo "  [3/3] Creating XCFramework..."
 
-DEVICE_LIB="$CRATES_DIR/target/aarch64-apple-ios/release/libkessel_core.a"
-SIM_LIB="$CRATES_DIR/target/aarch64-apple-ios-sim/release/libkessel_core.a"
+DEVICE_LIB="$CRATES_DIR/target/aarch64-apple-ios/release/libvoice_agent_core.a"
+SIM_LIB="$CRATES_DIR/target/aarch64-apple-ios-sim/release/libvoice_agent_core.a"
 
 # Use the UniFFI-generated header
 HEADER_DIR="$ROOT_DIR/vendor/uniffi-swift"
-HEADER="$HEADER_DIR/kessel_coreFFI.h"
-MODULEMAP="$HEADER_DIR/kessel_core.modulemap"
+HEADER="$HEADER_DIR/voice_agent_coreFFI.h"
+MODULEMAP="$HEADER_DIR/voice_agent_core.modulemap"
 
 if [ ! -f "$HEADER" ]; then
     echo "Error: $HEADER not found. Run: bash scripts/gen_uniffi.sh"
@@ -66,7 +66,7 @@ cp "$MODULEMAP" "$DEVICE_HEADERS/"
 cp "$HEADER" "$SIM_HEADERS/"
 cp "$MODULEMAP" "$SIM_HEADERS/"
 
-XCFW_PATH="$OUTPUT_DIR/kessel_core.xcframework"
+XCFW_PATH="$OUTPUT_DIR/voice_agent_core.xcframework"
 rm -rf "$XCFW_PATH"
 
 xcodebuild -create-xcframework \
