@@ -7,11 +7,21 @@ Direction, decided 2026-07.
 > (`crates/lib/src/vm/`, `luax`, the `vm_*` client tools, `VmPlayer`, `PlayWindow`,
 > `--play`, and `docs/VM.md`) has been **removed entirely**, and the project was
 > renamed from `kessel`/`rs-kessel` to **voice-agent** (crate `voice-agent-core`,
-> cdylib `voice_agent_core`, `VOICE_AGENT_ACP_BACKEND`). Read every "VM" / `vm_*`
+> cdylib `voice_agent_core`, `VOICE_AGENT_BACKEND`). Read every "VM" / `vm_*`
 > mention below as describing the state at the time of the split, not today's.
 > Today the client tools voice-agent serves are `capture_screen` / `find_window` /
 > `apply_ocr` / `list_windows`, `read_situation_messages`, and
 > `suggest_next_check`.
+>
+> **"ACP" below is a misnomer.** This document (and the code it describes) used
+> "ACP" throughout for what is really the **codex-app-server** JSON-RPC method
+> set — `thread/start`, `turn/start`, `item/*`. It is unrelated to the [Agent
+> Client Protocol](https://agentclientprotocol.com), which uses `session/new`,
+> `session/prompt`, `fs/*`, `terminal/*` and shares no method with it but
+> `initialize`. The code has since been corrected (`acp_client.rs` →
+> `app_server_client.rs`, `AcpClient` → `AppServerClient`,
+> `VOICE_AGENT_ACP_BACKEND` → `VOICE_AGENT_BACKEND`); the prose below is left as
+> written. Read every "ACP" here as "codex-app-server".
 
 ## Status
 
@@ -59,7 +69,7 @@ in `../rs-gallium`. Not yet committed.
 
 **voice-agent side — Phase 4 in progress** (uncommitted, on `docs/harness-direction`):
 
-- **Phase 4a done** — `acp_client.rs`: an ACP client that spawns a backend
+- **Phase 4a done** — `app_server_client.rs`: an app-server client that spawns a backend
   (`gallium app-server` or `codex app-server`) and drives it a turn at a time,
   reusing the symmetric `appserver::rpc` transport. It sends
   `initialize`/`thread/start`/`turn/start` and handles inbound `item/tool/call`
@@ -76,7 +86,7 @@ in `../rs-gallium`. Not yet committed.
 - **Phase 4c done (Rust); Swift needs only a rebuild** — `Agent` is now
   **ACP-backed**, keeping the *exact same UDL surface* (`agent_new` + all `Agent`
   methods). `agent_new` spawns the backend (`gallium-agent app-server` by
-  default; override via `VOICE_AGENT_ACP_BACKEND`), forwards model/API config as env,
+  default; override via `VOICE_AGENT_BACKEND`), forwards model/API config as env,
   and serves the resident VM (`vm_*`), screen `capture`, `read_situation_messages`,
   and `suggest_next_check` back as client tools. `step`/`observe`/`evaluate_goal`
   drive backend turns (observe/eval on throwaway threads so they don't pollute
@@ -137,7 +147,7 @@ Stop maintaining two parallel agent stacks and one drifting vendored inference
 engine. After the split:
 
 - **voice-agent** = the luax **VM** + platform/frontend (voice TTS/STT, `PlayWindow`,
-  Swift/C# apps). It is a **backend-agnostic ACP client** — it drives whatever
+  Swift/C# apps). It is a **backend-agnostic app-server client** — it drives whatever
   app-server it's pointed at (`gallium` or `codex`). It has no agent loop and no
   local inference of its own.
 - **gallium** = the agent: ReAct loop, tools, MCP, the llama.cpp **and** native
@@ -228,7 +238,7 @@ the largest chunk.
 Move `appserver/` into gallium-agent; add the `app-server` dispatch to gallium's
 `main.rs` (it already has a REPL main). gallium's binary now serves ACP.
 
-### Phase 4 — Build the voice-agent ACP client
+### Phase 4 — Build the voice-agent app-server client
 Swift/C# spawns the gallium (or codex) `app-server` and speaks JSON-RPC.
 voice-agent registers `vm_*` + `capture` as `dynamicTools`; rewrite `vm/tools.rs`'s
 registration surface as client-tool executors (VM logic untouched). Port
@@ -237,7 +247,7 @@ goals/situation/ambient/backchannel to client-side orchestration over ACP.
 ### Phase 5 — Delete from voice-agent
 Remove `crates/app` (voice-agent-cli), `crates/gallium-core`, `crates/gallium-models`
 (vendored), and every moved `lib` module. `voice-agent-core` shrinks to VM + VmPlayer
-+ ACP client + executors; its UDL drops the agent-y `Agent` methods.
++ app-server client + executors; its UDL drops the agent-y `Agent` methods.
 
 ### Phase 6 — Docs + scripts
 Update CLAUDE.md/README/Makefile and the `win/` build scripts for the

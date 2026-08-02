@@ -1,7 +1,7 @@
 //! JSON-RPC 2.0 transport over stdio for the codex-app-server protocol subset.
 //!
 //! Only the symmetric transport (`rpc`) remains here: voice-agent drives a backend
-//! agent as an ACP *client* (see [`crate::acp_client`]), reusing this same
+//! agent as an app-server *client* (see [`crate::app_server_client`]), reusing this same
 //! `Connection` + `serve` to send `initialize`/`thread/start`/`turn/start` and
 //! handle the backend's inbound `item/tool/call` and approval requests. The
 //! in-process server (the old `voice-agent-cli app-server`) was removed when the

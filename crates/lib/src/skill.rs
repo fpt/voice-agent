@@ -56,7 +56,7 @@ impl SkillRegistry {
 
     /// Build a catalog string for injection into the backend thread's developer
     /// instructions. Each skill's full prompt is inlined (there is no lookup tool
-    /// over ACP — the backend gets everything up front). Returns None if no skills
+    /// over the wire — the backend gets everything up front). Returns None if no skills
     /// are registered.
     pub fn catalog(&self) -> Option<String> {
         let skills = self.skills.read().unwrap();

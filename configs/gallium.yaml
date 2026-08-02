@@ -1,9 +1,9 @@
 # Gallium / local backend (default)
 #
-# voice-agent is an ACP client: it spawns a backend agent and drives it a turn at a
+# voice-agent is an app-server client: it spawns a backend agent and drives it a turn at a
 # time. This is the default backend — `gallium`, the standalone pure-Rust agent
 # (from ../rs-gallium) with the native candle + llama.cpp local engines. It must
-# be on PATH (override the program with `VOICE_AGENT_ACP_BACKEND`). The `llm:` fields
+# be on PATH (override the program with `VOICE_AGENT_BACKEND`). The `llm:` fields
 # below are forwarded to it as environment; the backend runs the ReAct loop,
 # tools, and MCP.
 #

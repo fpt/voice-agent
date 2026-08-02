@@ -3,8 +3,8 @@
 ## Overview
 
 A macOS/Windows voice assistant frontend. voice-agent does **no LLM inference of
-its own** — it is an **ACP client** that spawns a backend agent (`gallium` by
-default; `codex` via `VOICE_AGENT_ACP_BACKEND`) and drives it a turn at a time over
+its own** — it is an **app-server client** that spawns a backend agent (`gallium` by
+default; `codex` via `VOICE_AGENT_BACKEND`) and drives it a turn at a time over
 JSON-RPC, serving its resident tools (screen capture, situation) back to the
 backend as `dynamicTools`.
 
@@ -18,7 +18,7 @@ backend as `dynamicTools`.
 Mic -> AVAudioEngine -> SpeechAnalyzer/SpeechTranscriber (STT)
     -> Swift CLI (main.swift)
     -> UniFFI bridge
-    -> Rust Agent (lib.rs) — an ACP client
+    -> Rust Agent (lib.rs) — an app-server client
     -> spawns + drives  ==>  gallium app-server (the backend agent:
                               ReAct loop, LLM providers, tools, MCP)
     <-  item/tool/call   <==  backend calls voice-agent's client tools (capture, situation)
@@ -28,7 +28,7 @@ Mic -> AVAudioEngine -> SpeechAnalyzer/SpeechTranscriber (STT)
 
 The backend is swappable: `gallium` and `codex` both speak the same
 codex-app-server JSON-RPC subset. See **[docs/REFACTOR.md](docs/REFACTOR.md)** for
-the split (voice-agent = platform + ACP client; the agent core lives in
+the split (voice-agent = platform + app-server client; the agent core lives in
 `../rs-gallium`).
 
 ### Rust Crate (`crates/lib`, `voice_agent_core`)
@@ -36,8 +36,8 @@ the split (voice-agent = platform + ACP client; the agent core lives in
 | File | Purpose |
 |------|---------|
 | `lib/src/lib.rs` | `Agent` struct + UniFFI exports. Spawns the backend, forwards config as env, serves client tools, drives turns. Goals, situation, backchannel, and the conversation mirror stay local. |
-| `lib/src/acp_client.rs` | ACP client: spawns `gallium app-server` (etc.) and drives it over line-delimited JSON-RPC, reusing the symmetric `appserver::rpc` transport. Sends `initialize`/`thread/start`/`turn/start`; handles inbound `item/tool/call` + approval requests. `ClientTool`/`HandlerClientTool` wrap any `ToolHandler` to serve it back to the backend. |
-| `lib/src/appserver/rpc.rs` | Symmetric JSON-RPC 2.0 transport over stdio (answers inbound requests on their own threads, delivers inbound responses to outbound requests). Shared by the ACP client. |
+| `lib/src/app_server_client.rs` | app-server client: spawns `gallium app-server` (etc.) and drives it over line-delimited JSON-RPC, reusing the symmetric `appserver::rpc` transport. Sends `initialize`/`thread/start`/`turn/start`; handles inbound `item/tool/call` + approval requests. `ClientTool`/`HandlerClientTool` wrap any `ToolHandler` to serve it back to the backend. |
+| `lib/src/appserver/rpc.rs` | Symmetric JSON-RPC 2.0 transport over stdio (answers inbound requests on their own threads, delivers inbound responses to outbound requests). Shared by the app-server client. |
 | `lib/src/appserver/mod.rs` | Just re-exports `rpc` now (the in-process server was removed with the agent core). |
 | `lib/src/llm.rs` | Shared data types only: `ChatMessage`, `ChatRole`, `TokenUsage`, `ImageContent`, `ToolDefinition`, `ToolCallInfo`. No provider layer. |
 | `lib/src/mcp.rs` | JSON-RPC 2.0 / MCP wire-type constants used by `rpc.rs`. |
@@ -65,8 +65,8 @@ the split (voice-agent = platform + ACP client; the agent core lives in
 
 ### Key Patterns
 
-- **voice-agent runs no inference.** `agent_new` spawns the backend (`backend_command()` — `gallium` by default, override with `VOICE_AGENT_ACP_BACKEND`), forwards model/API config as environment (`MODEL_PATH`, `OPENAI_API_KEY`, `LLM_BASE_URL`, `LLM_MODEL`, `INFERENCE_ENGINE`, …), and drives turns. `step`/`observe`/`evaluate_goal` each run a backend turn; `observe`/`evaluate_goal` use throwaway threads so they don't pollute history.
-- **Client tools** (`acp_client::ClientTool`): screen `capture`, `read_situation_messages`, and `suggest_next_check` are registered as the backend's `dynamicTools`. The backend's model calls them; the request arrives as an inbound `item/tool/call` and executes against resident voice-agent state. `HandlerClientTool` adapts any `ToolHandler` verbatim.
+- **voice-agent runs no inference.** `agent_new` spawns the backend (`backend_command()` — `gallium` by default, override with `VOICE_AGENT_BACKEND`), forwards model/API config as environment (`MODEL_PATH`, `OPENAI_API_KEY`, `LLM_BASE_URL`, `LLM_MODEL`, `INFERENCE_ENGINE`, …), and drives turns. `step`/`observe`/`evaluate_goal` each run a backend turn; `observe`/`evaluate_goal` use throwaway threads so they don't pollute history.
+- **Client tools** (`app_server_client::ClientTool`): screen `capture`, `read_situation_messages`, and `suggest_next_check` are registered as the backend's `dynamicTools`. The backend's model calls them; the request arrives as an inbound `item/tool/call` and executes against resident voice-agent state. `HandlerClientTool` adapts any `ToolHandler` verbatim.
 - `ChatMessage` has `#[serde(skip)]` fields for tool state; use helper methods (`ChatMessage::user()`, `ChatMessage::assistant()`, etc.) not struct literals.
 - The transport (`appserver::rpc`) is **bidirectional** — inbound requests are dispatched on their own threads so a long `turn/start` can originate tool-call requests while the reader keeps running.
 - **Approvals**: `agent_new` takes an optional `MutationApprover` (a UniFFI foreign trait). When one is supplied, the main conversation thread opens with `approvalPolicy: "untrusted"` so the backend escalates every file write / shell command; the request arrives as an inbound `item/{fileChange,commandExecution}/requestApproval` and is routed to the approver, which blocks the turn until it answers allow-once / allow-session / deny. The macOS CLI's `ReplApprover` prompts on stdin in text mode, denies in voice mode (no safe way to confirm by speech), and auto-allows for one-shot `--prompt`. **With no approver the main thread opens `"never"` and the backend runs mutations autonomously** (this is what Windows does today, and it's why unconfigured builds edit files without asking). Throwaway `observe`/`evaluate_goal` threads always use `"never"` — they must not block on a prompt. voice-agent has no sandbox.
@@ -80,7 +80,7 @@ prompt supports the `{language}` template variable.
 | config | backend | notes |
 |--------|---------|-------|
 | `gallium.yaml` | `gallium` (default) | local model via the standalone pure-Rust agent; `modelPath` + `inferenceEngine` forwarded as env |
-| `codex.yaml` | `codex` (cloud) | set `VOICE_AGENT_ACP_BACKEND=codex` + `OPENAI_API_KEY`; `baseURL`/`model` forwarded |
+| `codex.yaml` | `codex` (cloud) | set `VOICE_AGENT_BACKEND=codex` + `OPENAI_API_KEY`; `baseURL`/`model` forwarded |
 
 ```yaml
 llm:
@@ -103,7 +103,7 @@ stt:  { enabled: true, locale: "en-US", censor: false }
 ```
 
 The `llm:` block is **forwarded to the backend as environment** — voice-agent does not
-interpret it beyond that. Backend selection is via `VOICE_AGENT_ACP_BACKEND` (env), not
+interpret it beyond that. Backend selection is via `VOICE_AGENT_BACKEND` (env), not
 the config.
 
 ## Skills
@@ -129,7 +129,7 @@ cd swift && swift build
 
 # Run (needs a backend on PATH — install `gallium` from ../rs-gallium)
 cd swift && swift run voice-agent-cli --config ../configs/gallium.yaml           # local backend
-VOICE_AGENT_ACP_BACKEND=codex OPENAI_API_KEY=sk-... \
+VOICE_AGENT_BACKEND=codex OPENAI_API_KEY=sk-... \
   swift run voice-agent-cli --config ../configs/codex.yaml --text                # cloud backend
 ```
 
@@ -169,11 +169,18 @@ win/VoiceAgentCli/bin/Release/net8.0-windows/voice-agent.exe --config configs/ga
 - `win/VoiceAgentCli/SpeechInput.cs` — STT via `System.Speech`. `win/VoiceAgentCli/VoiceOutput.cs` — TTS via `System.Speech.Synthesis`.
 - `win/VoiceAgentCli/DotEnv.cs` — loads a local `.env` at startup. `win/VoiceAgentCli/AppConfig.cs` — YAML loader (config resolution: `--config` → `VOICE_AGENT_CONFIG` → `~/.cache/voice-agent/config.yml` → `configs/gallium.yaml`).
 
-## ACP client mode (`lib/src/acp_client.rs`)
+## app-server client mode (`lib/src/app_server_client.rs`)
 
-`agent_new` spawns the backend and drives it as a **whole-turn** ACP client over
+`agent_new` spawns the backend and drives it as a **whole-turn** app-server client over
 line-delimited JSON-RPC 2.0 on the child's stdio — the mirror of the
 codex-app-server protocol.
+
+> **This is not ACP.** The method set below is codex-app-server's. The [Agent
+> Client Protocol](https://agentclientprotocol.com) is a different protocol
+> (`session/new`, `session/prompt`, `session/update`, `session/request_permission`,
+> `fs/*`, `terminal/*`) and shares nothing with this one except `initialize`.
+> Much of the tree used to call this an "ACP client" — if you find a stray "ACP"
+> anywhere, it means codex-app-server and should be fixed.
 
 | Method | Direction | Purpose |
 |--------|-----------|---------|
@@ -196,7 +203,7 @@ Key points:
 voice-agent/
 ├── configs/                    # gallium.yaml (local), codex.yaml (cloud), system-prompt.md
 ├── skills/                     # project-local skills
-├── crates/lib/src/             # voice_agent_core (cdylib): ACP client, client tools, orchestration
+├── crates/lib/src/             # voice_agent_core (cdylib): app-server client, client tools, orchestration
 ├── swift/Sources/              # VoiceAgentCli, AgentKit, Audio, TTS, ScreenCapture, Util, AgentBridge(FFI)
 ├── win/VoiceAgentCli/          # C# frontend
 ├── scripts/                    # gen_uniffi{,_cs}.sh, build-win-local.bat, build-ios.sh
@@ -211,6 +218,6 @@ voice-agent/
 
 **UniFFI checksum mismatch**: regenerate and the script copies for you: `bash scripts/gen_uniffi.sh`
 
-**"spawn backend 'gallium': No such file"**: the backend isn't on PATH. Build/install `gallium` from `../rs-gallium`, or set `VOICE_AGENT_ACP_BACKEND` to another codex-app-server binary (e.g. `codex`).
+**"spawn backend 'gallium': No such file"**: the backend isn't on PATH. Build/install `gallium` from `../rs-gallium`, or set `VOICE_AGENT_BACKEND` to another codex-app-server binary (e.g. `codex`).
 
 **Model OOM / local inference issues**: these are the **backend's** concern now — tune the model/quant in the backend (`../rs-gallium`). voice-agent only forwards `MODEL_PATH`/`INFERENCE_ENGINE`.

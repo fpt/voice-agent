@@ -1,4 +1,7 @@
-//! ACP client: drive a whole-turn agent backend over line-delimited JSON-RPC.
+//! App-server client: drive a whole-turn agent backend over line-delimited
+//! JSON-RPC (the codex-app-server method subset — `thread/start`, `turn/start`,
+//! `item/*`). This is **not** the Agent Client Protocol (ACP), which uses an
+//! entirely different method set (`session/new`, `session/prompt`, `fs/*`, …).
 //!
 //! voice-agent spawns a backend that speaks the codex-app-server subset — `gallium
 //! app-server` (the default) or `codex app-server` — and drives it a turn at a
@@ -189,7 +192,7 @@ impl RequestHandler for ClientHandler {
 }
 
 /// A driven connection to a backend agent process.
-pub struct AcpClient {
+pub struct AppServerClient {
     conn: Arc<Connection>,
     shared: Arc<Shared>,
     thread_id: Mutex<Option<String>>,
@@ -199,7 +202,7 @@ pub struct AcpClient {
     reader: Mutex<Option<std::thread::JoinHandle<()>>>,
 }
 
-impl AcpClient {
+impl AppServerClient {
     /// Spawn `program args… app-server` and drive it. `envs` are set on the child
     /// (the backend reads its model/API config from the environment). `tools` are
     /// served back to the backend as `dynamicTools`; `approver` answers its
@@ -390,7 +393,7 @@ impl AcpClient {
     }
 }
 
-impl Drop for AcpClient {
+impl Drop for AppServerClient {
     fn drop(&mut self) {
         // Kill the child first: that closes its stdout, so the reader's `serve`
         // loop sees EOF and returns — only then is it safe to join.
@@ -544,7 +547,7 @@ mod tests {
         });
 
         let called = Arc::new(AtomicBool::new(false));
-        let client = AcpClient::new_over(
+        let client = AppServerClient::new_over(
             reader_over(client_in),
             Box::new(ByteChannelWriter { tx: client_out }),
             vec![Arc::new(PingTool {
@@ -648,7 +651,7 @@ mod tests {
         }
 
         let asked = Arc::new(Mutex::new(None));
-        let client = AcpClient::new_over(
+        let client = AppServerClient::new_over(
             reader_over(client_in),
             Box::new(ByteChannelWriter { tx: client_out }),
             vec![],
