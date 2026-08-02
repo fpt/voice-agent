@@ -18,9 +18,11 @@
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Write};
 use std::process::{Child, Command, Stdio};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::time::Duration;
 
-use parking_lot::Mutex;
+use parking_lot::{Condvar, Mutex};
 use serde_json::{json, Value};
 
 use crate::appserver::rpc::{serve, Connection, HandlerResult, RequestHandler, RpcFault};
@@ -111,12 +113,81 @@ fn approval_target(params: &Value, keys: &[&str]) -> String {
     params.to_string()
 }
 
+/// How a turn ended, as reported by `turn/completed` / `turn/failed`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum TurnOutcome {
+    /// `turn/completed`. `status` is codex's `completed` | `interrupted` | ….
+    Completed { status: String },
+    /// gallium's `turn/failed`. Codex has no such notification — it spells every
+    /// ending as `turn/completed` — so a client must accept both.
+    Failed { message: String },
+}
+
+/// What we know about one turn. Created on demand: the backend's notifications
+/// for a turn can arrive **before** the `turn/start` response that names it, so
+/// the reader cannot assume the waiter registered the turn first.
+#[derive(Default)]
+struct TurnSlot {
+    /// `agentMessage` texts in arrival order. A turn emits more than one once it
+    /// can be steered, so these accumulate rather than overwrite.
+    messages: Vec<String>,
+    /// `None` while the turn is still running.
+    outcome: Option<TurnOutcome>,
+}
+
 /// Inbound state the reader thread and the calling thread share.
 struct Shared {
     tools: HashMap<String, Arc<dyn ClientTool>>,
     approver: Arc<dyn Approver>,
-    /// Final `agentMessage` text captured from `item/completed`, keyed by turnId.
-    replies: Mutex<HashMap<String, String>>,
+    /// In-flight and just-finished turns, keyed by turn id. Entries are removed
+    /// by whoever waits on them.
+    turns: Mutex<HashMap<String, TurnSlot>>,
+    /// Woken whenever `turns` changes or the connection closes.
+    turn_signal: Condvar,
+    /// Set when the reader loop exits (the backend closed its stdout, or died).
+    /// Waiters must give up rather than block on a turn that can never complete.
+    closed: AtomicBool,
+}
+
+impl Shared {
+    /// Record an `agentMessage` for `turn_id`, creating the slot if the reader
+    /// got here before the waiter.
+    fn push_message(&self, turn_id: &str, text: &str) {
+        self.turns
+            .lock()
+            .entry(turn_id.to_string())
+            .or_default()
+            .messages
+            .push(text.to_string());
+        self.turn_signal.notify_all();
+    }
+
+    /// Mark `turn_id` finished and wake its waiter.
+    fn finish_turn(&self, turn_id: &str, outcome: TurnOutcome) {
+        self.turns
+            .lock()
+            .entry(turn_id.to_string())
+            .or_default()
+            .outcome = Some(outcome);
+        self.turn_signal.notify_all();
+    }
+
+    /// Mark the connection dead and release every waiter.
+    fn mark_closed(&self) {
+        self.closed.store(true, Ordering::SeqCst);
+        self.turn_signal.notify_all();
+    }
+}
+
+/// Pull a turn id out of a payload that may name it either way: `turn.id` (the
+/// current shape, used by `turn/start` responses and `turn/completed`) or a flat
+/// `turnId` (`item/completed`, gallium's `turn/failed`, and older backends).
+fn turn_id_of(value: &Value) -> Option<&str> {
+    value
+        .get("turn")
+        .and_then(|t| t.get("id"))
+        .and_then(Value::as_str)
+        .or_else(|| value.get("turnId").and_then(Value::as_str))
 }
 
 /// Services the backend's inbound traffic: tool calls, approval requests, and the
@@ -170,23 +241,51 @@ impl RequestHandler for ClientHandler {
     }
 
     fn handle_notification(&self, _conn: &Arc<Connection>, method: &str, params: Value) {
-        if method != "item/completed" {
-            return;
-        }
-        let item = params.get("item");
-        let is_message =
-            item.and_then(|i| i.get("type")).and_then(Value::as_str) == Some("agentMessage");
-        if !is_message {
-            return;
-        }
-        if let (Some(turn), Some(text)) = (
-            params.get("turnId").and_then(Value::as_str),
-            item.and_then(|i| i.get("text")).and_then(Value::as_str),
-        ) {
-            self.shared
-                .replies
-                .lock()
-                .insert(turn.to_string(), text.to_string());
+        match method {
+            // Carries the turn's text. One turn can emit several of these.
+            "item/completed" => {
+                let item = params.get("item");
+                let is_message = item.and_then(|i| i.get("type")).and_then(Value::as_str)
+                    == Some("agentMessage");
+                if !is_message {
+                    return;
+                }
+                if let (Some(turn), Some(text)) = (
+                    turn_id_of(&params),
+                    item.and_then(|i| i.get("text")).and_then(Value::as_str),
+                ) {
+                    self.shared.push_message(turn, text);
+                }
+            }
+            // The turn is over. This — not the `turn/start` response — is what a
+            // caller waits on: both backends answer `turn/start` immediately and
+            // run the turn in the background, precisely so it stays interruptible.
+            "turn/completed" => {
+                if let Some(turn) = turn_id_of(&params) {
+                    let status = params
+                        .get("turn")
+                        .and_then(|t| t.get("status"))
+                        .and_then(Value::as_str)
+                        .unwrap_or("completed")
+                        .to_string();
+                    self.shared
+                        .finish_turn(turn, TurnOutcome::Completed { status });
+                }
+            }
+            // gallium only; codex folds failures into `turn/completed`.
+            "turn/failed" => {
+                if let Some(turn) = turn_id_of(&params) {
+                    let message = params
+                        .get("error")
+                        .and_then(|e| e.get("message"))
+                        .and_then(Value::as_str)
+                        .unwrap_or("turn failed")
+                        .to_string();
+                    self.shared
+                        .finish_turn(turn, TurnOutcome::Failed { message });
+                }
+            }
+            _ => {}
         }
     }
 }
@@ -253,7 +352,9 @@ impl AppServerClient {
         let shared = Arc::new(Shared {
             tools: tool_map,
             approver,
-            replies: Mutex::new(HashMap::new()),
+            turns: Mutex::new(HashMap::new()),
+            turn_signal: Condvar::new(),
+            closed: AtomicBool::new(false),
         });
         let conn = Connection::new(writer);
         let handler = Arc::new(ClientHandler {
@@ -261,7 +362,14 @@ impl AppServerClient {
         });
 
         let reader_conn = Arc::clone(&conn);
-        let reader_handle = std::thread::spawn(move || serve(reader, reader_conn, handler));
+        let reader_shared = Arc::clone(&shared);
+        let reader_handle = std::thread::spawn(move || {
+            serve(reader, reader_conn, handler);
+            // `serve` returns on EOF or a read error: the backend is gone and no
+            // further `turn/completed` can arrive. Release anyone waiting on a
+            // turn, or they block forever.
+            reader_shared.mark_closed();
+        });
 
         Arc::new(Self {
             conn,
@@ -370,16 +478,55 @@ impl AppServerClient {
             }),
         )?;
 
-        // The final text arrives as an `item/completed` agentMessage notification,
-        // which the server writes before the `turn/start` response — so by the
-        // time `request` returns, the reader has already captured it.
-        let turn_id = resp.get("turnId").and_then(Value::as_str).unwrap_or("");
-        Ok(self
-            .shared
-            .replies
-            .lock()
-            .remove(turn_id)
-            .unwrap_or_default())
+        // `turn/start` is answered as soon as the turn is *accepted*, not when it
+        // finishes — that is what keeps a turn interruptible. The id it names is
+        // how we then follow the turn to completion.
+        let turn_id = turn_id_of(&resp)
+            .ok_or_else(|| {
+                AgentError::InternalError(format!(
+                    "turn/start response named no turn (expected `turn.id` or `turnId`): {resp}"
+                ))
+            })?
+            .to_string();
+
+        self.await_turn(&turn_id)
+    }
+
+    /// Block until `turn_id` reports `turn/completed` / `turn/failed`, then take
+    /// its text. Notifications for the turn may already have arrived before this
+    /// is called — the slot is created on demand, so nothing is lost either way.
+    fn await_turn(&self, turn_id: &str) -> Result<String, AgentError> {
+        let mut turns = self.shared.turns.lock();
+        loop {
+            // Created on demand: the reader may not have seen this turn at all yet.
+            let slot = turns.entry(turn_id.to_string()).or_default();
+            if slot.outcome.is_some() {
+                let slot = turns.remove(turn_id).unwrap_or_default();
+                return match slot.outcome {
+                    Some(TurnOutcome::Failed { message }) => Err(AgentError::InternalError(
+                        format!("turn '{turn_id}' failed: {message}"),
+                    )),
+                    // `interrupted` is a normal ending, not an error: the caller
+                    // keeps whatever the turn produced before it was stopped.
+                    _ => Ok(slot.messages.join("\n")),
+                };
+            }
+
+            if self.shared.closed.load(Ordering::SeqCst) {
+                turns.remove(turn_id);
+                return Err(AgentError::InternalError(format!(
+                    "backend closed the connection while turn '{turn_id}' was running"
+                )));
+            }
+
+            // Timed wait rather than a bare one: a backend that never reports the
+            // turn would otherwise wedge the caller forever with no way out. The
+            // interval only bounds how fast we notice `closed`, not turn latency —
+            // turns legitimately run for minutes.
+            self.shared
+                .turn_signal
+                .wait_for(&mut turns, Duration::from_millis(500));
+        }
     }
 
     /// Run one turn on the client's main conversation thread.
@@ -475,11 +622,16 @@ mod tests {
 
     // --- a hand-rolled backend that speaks the protocol directly --------------
 
-    /// A minimal codex-app-server peer: it answers the client's
-    /// `initialize`/`thread/start`/`turn/start` and, on a turn, calls back the
-    /// client tool `ping` before emitting the final `agentMessage`. This replaces
-    /// the old in-process `AppServer` fixture (removed with the agent core) so the
-    /// client is exercised against the wire protocol, not our own server.
+    /// A minimal codex-app-server peer, matching what `gallium app-server` and
+    /// `codex app-server` actually do: `turn/start` is **answered immediately**
+    /// with `{turn:{id,status:"inProgress"}}` and the turn then runs in the
+    /// background, reporting through `item/completed` + `turn/completed`.
+    ///
+    /// Answering first and notifying afterwards is the whole point of the
+    /// fixture: the previous stub emitted `item/completed` *before* its response
+    /// and returned a flat `turnId`, a contract no shipping backend honours — so
+    /// it certified a client that returned an empty reply against both real
+    /// backends. See docs/STEERING.md.
     struct StubBackend;
 
     impl RequestHandler for StubBackend {
@@ -497,16 +649,28 @@ mod tests {
                     // reader must stay live to deliver the response.
                     let _ =
                         conn.request("item/tool/call", json!({ "tool": "ping", "arguments": {} }));
-                    // The final text arrives as an item/completed notification,
-                    // written before the turn/start response.
-                    conn.notify(
-                        "item/completed",
-                        json!({
-                            "turnId": "turn1",
-                            "item": { "type": "agentMessage", "text": "all done" },
-                        }),
-                    );
-                    Ok(json!({ "turnId": "turn1" }))
+
+                    // The turn's result lands *after* this response, from another
+                    // thread, as the real backends do.
+                    let conn = Arc::clone(conn);
+                    std::thread::spawn(move || {
+                        conn.notify(
+                            "item/completed",
+                            json!({
+                                "threadId": "t1",
+                                "turnId": "turn1",
+                                "item": { "type": "agentMessage", "text": "all done" },
+                            }),
+                        );
+                        conn.notify(
+                            "turn/completed",
+                            json!({
+                                "threadId": "t1",
+                                "turn": { "id": "turn1", "status": "completed" },
+                            }),
+                        );
+                    });
+                    Ok(json!({ "turn": { "id": "turn1", "status": "inProgress" } }))
                 }
                 _ => Err(RpcFault::method_not_found(method)),
             }
@@ -576,6 +740,219 @@ mod tests {
         assert!(tool_called, "backend never called the client tool");
     }
 
+    // --- turn-completion plumbing (see docs/STEERING.md, Stage 0) ------------
+
+    /// Build a client wired to `backend` over an in-memory duplex.
+    fn client_against(backend: Arc<dyn RequestHandler>) -> Arc<AppServerClient> {
+        let (client_out, server_in) = unbounded::<Vec<u8>>();
+        let (server_out, client_in) = unbounded::<Vec<u8>>();
+        let server_conn = Connection::new(Box::new(ByteChannelWriter { tx: server_out }));
+        std::thread::spawn(move || serve(reader_over(server_in), server_conn, backend));
+        AppServerClient::new_over(
+            reader_over(client_in),
+            Box::new(ByteChannelWriter { tx: client_out }),
+            vec![],
+            Arc::new(DeclineApprover),
+        )
+    }
+
+    /// Run `f` on its own thread and fail rather than hang if it wedges.
+    fn within<T: Send + 'static>(secs: u64, f: impl FnOnce() -> T + Send + 'static) -> T {
+        let (tx, rx) = unbounded::<T>();
+        std::thread::spawn(move || {
+            let _ = tx.send(f());
+        });
+        rx.recv_timeout(std::time::Duration::from_secs(secs))
+            .expect("completed in time (would otherwise hang)")
+    }
+
+    /// Emits `count` agentMessages, then ends the turn with `ending`.
+    struct ScriptedTurnBackend {
+        count: usize,
+        ending: &'static str,
+    }
+
+    impl RequestHandler for ScriptedTurnBackend {
+        fn handle_request(
+            &self,
+            conn: &Arc<Connection>,
+            method: &str,
+            _params: Value,
+        ) -> HandlerResult {
+            match method {
+                "initialize" => Ok(json!({ "userAgent": "voice-agent-test/0.1.0" })),
+                "thread/start" => Ok(json!({ "threadId": "t1" })),
+                "turn/start" => {
+                    let conn = Arc::clone(conn);
+                    let (count, ending) = (self.count, self.ending);
+                    std::thread::spawn(move || {
+                        for i in 0..count {
+                            conn.notify(
+                                "item/completed",
+                                json!({
+                                    "turnId": "turn1",
+                                    "item": { "type": "agentMessage", "text": format!("part{i}") },
+                                }),
+                            );
+                        }
+                        match ending {
+                            "failed" => conn.notify(
+                                "turn/failed",
+                                json!({
+                                    "threadId": "t1",
+                                    "turnId": "turn1",
+                                    "error": { "message": "model exploded" },
+                                }),
+                            ),
+                            status => conn.notify(
+                                "turn/completed",
+                                json!({
+                                    "threadId": "t1",
+                                    "turn": { "id": "turn1", "status": status },
+                                }),
+                            ),
+                        }
+                    });
+                    Ok(json!({ "turn": { "id": "turn1", "status": "inProgress" } }))
+                }
+                _ => Err(RpcFault::method_not_found(method)),
+            }
+        }
+    }
+
+    /// The turn id lives at `turn.id`, and the reply is whatever arrived before
+    /// `turn/completed` — *not* whatever happened to be present when `turn/start`
+    /// was answered. Both real backends answer that request immediately, so a
+    /// client that read the response as "done" returned an empty string.
+    #[test]
+    fn waits_for_turn_completed_rather_than_the_turn_start_response() {
+        let client = client_against(Arc::new(ScriptedTurnBackend {
+            count: 1,
+            ending: "completed",
+        }));
+        let reply = within(10, move || {
+            client.initialize("t").expect("initialize");
+            client
+                .start_thread(None, None, None, Some("never"), None)
+                .expect("thread/start");
+            client.run_turn("hi").expect("run_turn")
+        });
+        assert_eq!(reply, "part0");
+    }
+
+    /// A turn can emit several agentMessages — a steered turn always will. They
+    /// accumulate instead of the last one silently winning.
+    #[test]
+    fn collects_every_agent_message_in_a_turn() {
+        let client = client_against(Arc::new(ScriptedTurnBackend {
+            count: 3,
+            ending: "completed",
+        }));
+        let reply = within(10, move || {
+            client.initialize("t").expect("initialize");
+            client
+                .start_thread(None, None, None, Some("never"), None)
+                .expect("thread/start");
+            client.run_turn("hi").expect("run_turn")
+        });
+        assert_eq!(reply, "part0\npart1\npart2");
+    }
+
+    /// gallium reports a failure as `turn/failed`; codex folds it into
+    /// `turn/completed`. The client must surface the former as an error rather
+    /// than hang waiting for a `turn/completed` that never comes.
+    #[test]
+    fn surfaces_turn_failed_as_an_error() {
+        let client = client_against(Arc::new(ScriptedTurnBackend {
+            count: 0,
+            ending: "failed",
+        }));
+        let err = within(10, move || {
+            client.initialize("t").expect("initialize");
+            client
+                .start_thread(None, None, None, Some("never"), None)
+                .expect("thread/start");
+            client.run_turn("hi").unwrap_err().to_string()
+        });
+        assert!(err.contains("model exploded"), "unexpected error: {err}");
+    }
+
+    /// An interrupted turn is a normal ending: the caller keeps whatever the turn
+    /// produced before it was stopped.
+    #[test]
+    fn treats_an_interrupted_turn_as_a_normal_ending() {
+        let client = client_against(Arc::new(ScriptedTurnBackend {
+            count: 1,
+            ending: "interrupted",
+        }));
+        let reply = within(10, move || {
+            client.initialize("t").expect("initialize");
+            client
+                .start_thread(None, None, None, Some("never"), None)
+                .expect("thread/start");
+            client.run_turn("hi").expect("interrupted is not an error")
+        });
+        assert_eq!(reply, "part0");
+    }
+
+    /// A backend that accepts the turn and then dies must not wedge the caller
+    /// forever: the reader hitting EOF releases the waiter.
+    #[test]
+    fn a_dead_backend_releases_the_turn_waiter() {
+        let (client_out, server_in) = unbounded::<Vec<u8>>();
+        let (server_out, client_in) = unbounded::<Vec<u8>>();
+
+        // Hand-rolled rather than `serve`: this backend has to answer `turn/start`
+        // and *then* drop its write half while the client is still waiting, which
+        // is the whole scenario. Driving it through a handler cannot express that
+        // — the handler's return is what keeps the connection alive.
+        std::thread::spawn(move || {
+            let mut lines = reader_over(server_in).lines();
+            while let Some(Ok(line)) = lines.next() {
+                let msg: Value = match serde_json::from_str(&line) {
+                    Ok(v) => v,
+                    Err(_) => continue,
+                };
+                let method = msg
+                    .get("method")
+                    .and_then(Value::as_str)
+                    .unwrap_or("")
+                    .to_string();
+                let result = match method.as_str() {
+                    "initialize" => json!({ "userAgent": "voice-agent-test/0.1.0" }),
+                    "thread/start" => json!({ "threadId": "t1" }),
+                    "turn/start" => json!({ "turn": { "id": "turn1" } }),
+                    _ => continue,
+                };
+                let resp = json!({ "jsonrpc": "2.0", "id": msg.get("id"), "result": result });
+                let _ = server_out.send(format!("{resp}\n").into_bytes());
+                if method == "turn/start" {
+                    break; // accepted the turn, now die without ever reporting it
+                }
+            }
+            drop(server_out);
+        });
+
+        let client = AppServerClient::new_over(
+            reader_over(client_in),
+            Box::new(ByteChannelWriter { tx: client_out }),
+            vec![],
+            Arc::new(DeclineApprover),
+        );
+
+        let err = within(10, move || {
+            client.initialize("t").expect("initialize");
+            client
+                .start_thread(None, None, None, Some("never"), None)
+                .expect("thread/start");
+            client.run_turn("hi").unwrap_err().to_string()
+        });
+        assert!(
+            err.contains("closed the connection"),
+            "unexpected error: {err}"
+        );
+    }
+
     /// A backend that, mid-turn, asks the client to approve a file change and
     /// records the `decision` string it gets back — so a test can assert the
     /// Approver's reply reached the wire.
@@ -604,14 +981,25 @@ mod tests {
                         .get("decision")
                         .and_then(Value::as_str)
                         .map(str::to_string);
-                    conn.notify(
-                        "item/completed",
-                        json!({
-                            "turnId": "turn1",
-                            "item": { "type": "agentMessage", "text": "ok" },
-                        }),
-                    );
-                    Ok(json!({ "turnId": "turn1" }))
+                    let conn = Arc::clone(conn);
+                    std::thread::spawn(move || {
+                        conn.notify(
+                            "item/completed",
+                            json!({
+                                "threadId": "t1",
+                                "turnId": "turn1",
+                                "item": { "type": "agentMessage", "text": "ok" },
+                            }),
+                        );
+                        conn.notify(
+                            "turn/completed",
+                            json!({
+                                "threadId": "t1",
+                                "turn": { "id": "turn1", "status": "completed" },
+                            }),
+                        );
+                    });
+                    Ok(json!({ "turn": { "id": "turn1", "status": "inProgress" } }))
                 }
                 _ => Err(RpcFault::method_not_found(method)),
             }
