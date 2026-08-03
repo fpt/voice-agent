@@ -33,7 +33,7 @@ fn main() {
     println!("backend:   {user_agent}");
 
     client
-        .start_thread(Some("/tmp"), None, None, Some("never"), None)
+        .start_thread(Some("/tmp"), None, None, Some("never"), None, &[])
         .expect("thread/start");
 
     let started = Instant::now();

@@ -53,6 +53,14 @@ pub struct AgentConfig {
     /// `"prog arg1 arg2"`. Overridden by the `VOICE_AGENT_BACKEND` env var;
     /// `None` falls back to `gallium`.
     pub backend: Option<String>,
+    /// Absolute skill locations, forwarded on `thread/start` so the backend
+    /// registers them in its own skill store.
+    ///
+    /// Without this the two stores cannot agree: we inline the skills into
+    /// developer instructions while the backend's `LookupSkill` reads only its
+    /// own directories, so it answers "none" — and a model that consults it
+    /// concludes it has no skills at all.
+    pub skill_paths: Vec<String>,
     pub mcp_servers: Vec<McpServerConfig>,
 }
 
@@ -70,6 +78,7 @@ impl Default for AgentConfig {
             reasoning_effort: None,
             inference_engine: None,
             backend: None,
+            skill_paths: Vec::new(),
             mcp_servers: Vec::new(),
         }
     }
@@ -467,6 +476,7 @@ impl Agent {
                 instr.as_deref(),
                 Some(&self.mutation_policy),
                 self.mcp_config(),
+                &self.config.skill_paths,
             )?;
             *started = true;
         }
@@ -627,9 +637,14 @@ impl Agent {
             .unwrap_or_default();
 
         // Goal eval is tool-less and read-only; no MCP servers needed.
-        let thread =
-            self.client
-                .open_thread(None, None, instructions.as_deref(), Some("never"), None)?;
+        let thread = self.client.open_thread(
+            None,
+            None,
+            instructions.as_deref(),
+            Some("never"),
+            None,
+            &self.config.skill_paths,
+        )?;
         let raw = self.client.run_turn_on(&thread, &prompt)?;
         let (met, reason) = goal::parse_evaluation(&raw);
 
