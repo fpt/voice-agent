@@ -13,14 +13,11 @@
 backend: "gallium"
 
 llm:
-  # Gemma 4 E4B. Auto-downloaded into the HuggingFace cache by the backend's
-  # model downloader on first run.
-  modelPath: "hf:unsloth/gemma-4-E4B-it-GGUF/gemma-4-E4B-it-Q4_K_M.gguf"  # forwarded as MODEL_PATH
+  modelPath: "hf:LiquidAI/LFM2.5-8B-A1B-GGUF/LFM2.5-8B-A1B-Q4_K_M.gguf"
   # baseURL / apiKey: omitted — this is a local model, so there is no endpoint
   # or credential to send. (They used to be `""`, which the backend then had to
   # special-case so an empty string did not shadow its own default.)
-  model: "gemma-4-e4b"                # forwarded as LLM_MODEL
-  temperature: 0.7
+  temperature: 0.3
   maxTokens: 4096
 
   # The backend's local inference engine: "llamacpp" (in-process llama.cpp) or
