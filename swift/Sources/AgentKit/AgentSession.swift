@@ -3,6 +3,14 @@ import AgentBridge
 import Util
 import TTS
 
+/// A session that could not be started, phrased for a person.
+public struct AgentSessionError: LocalizedError, CustomStringConvertible {
+    public let message: String
+    public init(_ message: String) { self.message = message }
+    public var errorDescription: String? { message }
+    public var description: String { message }
+}
+
 /// Shared agent lifecycle — usable from CLI, iOS, or any other frontend.
 public class AgentSession: @unchecked Sendable {
 
@@ -69,35 +77,45 @@ public class AgentSession: @unchecked Sendable {
             workingDir: FileManager.default.currentDirectoryPath,
             reasoningEffort: config.llm.reasoningEffort,
             inferenceEngine: config.llm.inferenceEngine,
-            // "foundation-models" names an in-process backend, not a program on
-            // PATH. Passing it through would make the Rust side try to spawn a
-            // binary by that name if we end up falling back, so it is cleared
-            // here and Rust applies its own default (gallium).
-            backend: Self.wantsFoundationModels(config.backend) ? nil : config.backend,
+            // Always the configured value: the in-process backend is handled
+            // below and never reaches this path, because an unavailable one is
+            // now fatal rather than a fallback to Rust's default.
+            backend: config.backend,
             mcpServers: mcpServers
         )
 
         // `backend: "foundation-models"` runs Apple's on-device model in-process
-        // instead of spawning an app-server. It is device-gated (Apple silicon +
-        // Apple Intelligence enabled), so a request for it that the machine
-        // cannot honour falls back rather than failing — see
-        // docs/FOUNDATION_MODELS.md.
-        var chosen: AgentBackend? = nil
+        // instead of spawning an app-server. It is device-gated (macOS 26, Apple
+        // silicon, Apple Intelligence enabled).
+        //
+        // A machine that cannot honour it is a hard error, never a fallback.
+        // Silently starting a different backend than the config named turns a
+        // misconfiguration into a mystery — the session runs, answers
+        // differently, and the only clue is a warning line scrolled off above
+        // the banner. Failing here says exactly what is wrong and what to change.
         if Self.wantsFoundationModels(config.backend) {
             #if canImport(FoundationModels)
             if #available(macOS 26.0, *) {
-                chosen = await MainActor.run { FoundationModelsBackend.make(screenTools: ScreenTools()) }
+                self.backend = try await MainActor.run {
+                    try FoundationModelsBackend.make(screenTools: ScreenTools())
+                }
+                logger.info("Backend: foundation-models (on-device, in-process)")
             } else {
-                logger.warning("foundation-models needs macOS 26+; falling back to the app-server backend")
+                throw AgentSessionError(
+                    "Cannot start the foundation-models backend: it needs macOS 26 or later, "
+                        + "and this system is older. To use a different backend, set `backend:` "
+                        + "in the config (e.g. \"gallium\" or \"codex\") or export "
+                        + "VOICE_AGENT_BACKEND."
+                )
             }
             #else
-            logger.warning("this build has no FoundationModels; falling back to the app-server backend")
+            throw AgentSessionError(
+                "Cannot start the foundation-models backend: this build has no "
+                    + "FoundationModels framework. To use a different backend, set `backend:` "
+                    + "in the config (e.g. \"gallium\" or \"codex\") or export "
+                    + "VOICE_AGENT_BACKEND."
+            )
             #endif
-            if chosen != nil { logger.info("Backend: foundation-models (on-device, in-process)") }
-        }
-
-        if let fm = chosen {
-            self.backend = fm
         } else {
             let agent = try agentNew(config: agentConfig, approver: approver)
             self.backend = AppServerBackend(

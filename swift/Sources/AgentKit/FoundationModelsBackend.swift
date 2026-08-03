@@ -214,25 +214,49 @@ public final class FoundationModelsBackend: AgentBackend, @unchecked Sendable {
     private var goalTurns: UInt32 = 0
     private var goalLastReason: String?
 
-    /// `nil` when the device cannot run the on-device model — no Apple
+    /// Throws when the device cannot run the on-device model — no Apple
     /// Intelligence, unsupported hardware, or the model still downloading.
-    public static func make(screenTools: ScreenTools) -> FoundationModelsBackend? {
+    ///
+    /// Deliberately fatal rather than a fallback. Quietly starting a different
+    /// backend than the config named turns a misconfiguration into a mystery:
+    /// the session runs, answers differently, and the only clue is one warning
+    /// line above the banner.
+    public static func make(screenTools: ScreenTools) throws -> FoundationModelsBackend {
         let model = SystemLanguageModel.default
         switch model.availability {
         case .available:
             return FoundationModelsBackend(screenTools: screenTools)
         case .unavailable(let reason):
-            Logger("FoundationModels").warning(
-                "on-device model unavailable (\(reason)); falling back to the app-server backend"
-            )
-            return nil
+            throw FoundationModelsFailure(unavailableMessage(reason))
         @unknown default:
-            Logger("FoundationModels").warning(
-                "on-device model availability unknown; falling back to the app-server backend"
+            throw FoundationModelsFailure(
+                "Cannot start the foundation-models backend: the on-device model is "
+                    + "unavailable for an unrecognised reason. " + requirementHint
             )
-            return nil
         }
     }
+
+    private static func unavailableMessage(
+        _ reason: SystemLanguageModel.Availability.UnavailableReason
+    ) -> String {
+        let cause: String
+        switch reason {
+        case .deviceNotEligible:
+            cause = "this Mac does not support Apple Intelligence (it needs Apple silicon)"
+        case .appleIntelligenceNotEnabled:
+            cause = "Apple Intelligence is turned off in System Settings"
+        case .modelNotReady:
+            cause = "the on-device model is still downloading"
+        @unknown default:
+            cause = "the on-device model is unavailable (\(reason))"
+        }
+        return "Cannot start the foundation-models backend: \(cause). " + requirementHint
+    }
+
+    static let requirementHint =
+        "It requires macOS 26 on Apple silicon with Apple Intelligence enabled. "
+        + "To use a different backend, set `backend:` in the config "
+        + "(e.g. \"gallium\" or \"codex\") or export VOICE_AGENT_BACKEND."
 
     private init(screenTools: ScreenTools) {
         // Built as locals so the session can be assigned once. Tools need both

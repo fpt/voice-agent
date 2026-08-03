@@ -68,6 +68,9 @@ func runMain() async {
 // Parse command line arguments
 let arguments = CommandLine.arguments
 var configPath = "configs/gallium.yaml"
+// Whether `--config` was passed. An explicit path that is missing or malformed
+// is a mistake worth stopping for; the built-in default is not.
+var configExplicit = false
 // Force the text REPL even when STT is enabled in the config.
 var forceText = false
 // One-shot: run a single agent turn with this prompt, print the reply, exit.
@@ -76,6 +79,7 @@ var oneShotPrompt: String? = nil
 for (index, arg) in arguments.enumerated() {
     if arg == "--config" && index + 1 < arguments.count {
         configPath = arguments[index + 1]
+        configExplicit = true
     } else if arg == "--help" || arg == "-h" {
         printHelp()
         exit(0)
@@ -114,20 +118,30 @@ func printHelp() {
     """)
 }
 
-// Load configuration
+// Load configuration.
+//
+// A `--config` the user typed is a statement of intent: if it is missing or does
+// not parse, stop and say so. Falling back to defaults there silently runs a
+// different backend and model than the one asked for, which is only discovered
+// much later — the same trap as backend fallback. An absent *default* path is
+// not a mistake, so that still degrades to built-in defaults.
 let config: Config
 do {
     if FileManager.default.fileExists(atPath: configPath) {
         config = try Config.load(from: configPath)
         logger.info("Loaded configuration from \(configPath)")
+    } else if configExplicit {
+        FileHandle.standardError.write(Data("\nCannot start: no config file at \(configPath)\n\n".utf8))
+        exit(1)
     } else {
         config = Config.default()
-        logger.warning("Config file not found, using defaults")
+        logger.warning("No config at \(configPath); using built-in defaults")
     }
 } catch {
-    logger.error("Failed to load configuration: \(error)")
-    config = Config.default()
-    logger.info("Using default configuration")
+    FileHandle.standardError.write(
+        Data("\nCannot start: failed to read \(configPath): \(error)\n\n".utf8)
+    )
+    exit(1)
 }
 
 // Line editing + persistent REPL history for both the text and voice prompts.
@@ -147,7 +161,9 @@ let session: AgentSession
 do {
     session = try await AgentSession(config: config, configPath: configPath, approver: approver)
 } catch {
-    logger.error("Failed to initialize agent: \(error)")
+    // Startup failures are usually configuration problems and the message says
+    // what to change, so print it plainly rather than only through the logger.
+    FileHandle.standardError.write(Data("\nCannot start: \(error)\n\n".utf8))
     exit(1)
 }
 

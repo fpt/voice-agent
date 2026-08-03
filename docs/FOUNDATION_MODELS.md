@@ -138,8 +138,8 @@ a real turn.
 
 Done. `backend: "foundation-models"` (see `configs/foundation-models.yaml`)
 runs the on-device model in-process — **no backend process is spawned at all**.
-Availability is checked at startup and an unsupported machine falls back to the
-app-server path rather than failing.
+Availability is checked at startup, and a machine that cannot run it is a **hard
+error**, not a fallback.
 
 Three Swift `Tool` conformers (`list_windows`, `find_window`, `read_window`)
 call `ScreenTools` directly. No capture bridge, no 100 ms poller.
@@ -262,10 +262,27 @@ So: short exchanges and single tool calls are reliable; long tool chains are not
 yet. Stage 3's context work (a skill lookup tool, transcript trimming, PCC
 escalation) is aimed squarely at this.
 
+## Failing fast
+
+A config naming a backend the machine cannot run stops the process. It does not
+quietly start a different one.
+
+This was originally a fallback, and the cost showed up the first time
+`foundation-models.yaml` was run on an older Mac: the session started, answered
+from gallium instead, and the only clue was one warning line above a banner that
+then said "gallium app-server". A misconfiguration became a mystery. The error
+now names the cause — ineligible hardware, Apple Intelligence off, model still
+downloading, or macOS too old — and how to pick a different backend.
+
+The same reasoning applies to `--config`. A path the user typed is a statement
+of intent, so a missing or malformed one exits rather than silently running the
+built-in defaults (a different backend *and* model than asked for). Omitting
+`--config` entirely is not a mistake, so that still degrades to defaults.
+
 ## Risks
 
-- **Device gating.** M1+ with Apple Intelligence enabled. Needs a real
-  `availability` check and a graceful fallback, not a crash.
+- **Device gating.** M1+ with Apple Intelligence enabled, checked at startup and
+  fatal when unmet.
 - **Guardrails.** FM can refuse content; a refusal must not look like a turn
   failure.
 - **No public tokenizer.** Token estimation is heuristic, which is

@@ -6,9 +6,9 @@
 #
 #   voice-agent --config configs/foundation-models.yaml
 #
-# Requires macOS 26+ on Apple silicon with Apple Intelligence enabled. On a
-# machine that cannot run it, voice-agent logs a warning and falls back to the
-# `gallium` app-server rather than failing.
+# Requires macOS 26+ on Apple silicon with Apple Intelligence enabled. A machine
+# that cannot run it is a hard error: voice-agent says why and exits, rather than
+# quietly starting a different backend than this file names.
 #
 # **The window is 4096 tokens, shared between input and output, and overflow is
 # an error rather than a truncation.** That shapes this config: skills are

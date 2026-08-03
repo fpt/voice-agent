@@ -80,7 +80,7 @@ system prompt supports the `{language}` template variable.
 |--------|---------|-------|
 | `gallium.yaml` | `gallium` (default) | local model via the standalone pure-Rust agent; `modelPath` + `inferenceEngine` forwarded as env |
 | `codex.yaml` | `codex` (cloud) | declares `backend: "codex"`; codex authenticates itself via `codex login` — no credentials are passed to it |
-| `foundation-models.yaml` | **none** (in-process) | Apple on-device model via `AgentKit.FoundationModelsBackend`. Spawns no process at all; needs macOS 26 + Apple silicon + Apple Intelligence, and falls back to `gallium` when unavailable. See **[docs/FOUNDATION_MODELS.md](docs/FOUNDATION_MODELS.md)**. |
+| `foundation-models.yaml` | **none** (in-process) | Apple on-device model via `AgentKit.FoundationModelsBackend`. Spawns no process at all; needs macOS 26 + Apple silicon + Apple Intelligence, and **exits with an explanation** when unavailable rather than falling back. See **[docs/FOUNDATION_MODELS.md](docs/FOUNDATION_MODELS.md)**. |
 
 ```yaml
 backend: "gallium"                      # backend program on PATH; VOICE_AGENT_BACKEND overrides
