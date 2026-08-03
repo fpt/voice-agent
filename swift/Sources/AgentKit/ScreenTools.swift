@@ -36,7 +36,7 @@ public final class ScreenTools {
     /// Reserving room for the notice up front matters: appending it after taking
     /// a full-size prefix overshoots the cap on every truncation, which defeats
     /// the point of having a hard budget.
-    public static func cap(_ text: String) -> String {
+    public nonisolated static func cap(_ text: String) -> String {
         guard text.count > maxResultChars else { return text }
 
         let notice = { (kept: Int) in

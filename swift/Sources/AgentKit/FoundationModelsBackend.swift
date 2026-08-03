@@ -7,6 +7,49 @@ import FoundationModels
 
 // MARK: - Tools
 
+/// Run a tool body, reporting failure to the *model* rather than throwing.
+///
+/// A throwing `Tool.call` aborts the whole turn — a denied screen-recording
+/// permission killed an entire conversation with "Failed to start stream due to
+/// audio/video capture failure". The app-server backend does not behave that
+/// way: `item/tool/call` answers `success: false` with the detail, which the
+/// comment there calls "a normal ReAct outcome, not a transport error". This
+/// keeps the two paths consistent, and lets the model try something else.
+func toolResult(_ body: () async throws -> String) async throws -> String {
+    do {
+        return try await body()
+    } catch is CancellationError {
+        // Cancellation is not a tool outcome. Reporting it as one would have the
+        // model reason about a turn that is being torn down.
+        throw CancellationError()
+    } catch {
+        // `errorDetail` rather than `localizedDescription`: the point of handing
+        // a failure to the model is so it can tell a permission problem it should
+        // stop retrying from a transient one worth another go, and a bridged
+        // error localizes to "The operation couldn't be completed" with the cause
+        // buried in `NSMultipleUnderlyingErrorsKey`.
+        return "Tool failed: \(errorDetail(error))"
+    }
+}
+
+/// Pull the actionable cause out of a bridged error.
+///
+/// `localizedDescription` on a Foundation Models / Cocoa error is often just
+/// "The operation couldn't be completed", with what actually went wrong stored
+/// under `NSMultipleUnderlyingErrorsKey` or `NSUnderlyingErrorKey`.
+func errorDetail(_ error: Error) -> String {
+    let ns = error as NSError
+    var parts = [ns.localizedDescription]
+    let underlying = (ns.userInfo[NSMultipleUnderlyingErrorsKey] as? [Error] ?? [])
+        + (ns.userInfo[NSUnderlyingErrorKey].map { [$0 as? Error].compactMap { $0 } } ?? [])
+    for u in underlying {
+        let n = u as NSError
+        let described = n.localizedDescription
+        parts.append(described.isEmpty ? "\(n.domain) \(n.code)" : "\(n.domain) \(n.code): \(described)")
+    }
+    return parts.joined(separator: " / ")
+}
+
 /// Screen tools exposed to the model. Each calls ``ScreenTools`` directly —
 /// there is no capture bridge and no poller on this path.
 
@@ -22,7 +65,7 @@ struct ListWindowsTool: Tool {
     let tools: ScreenTools
 
     func call(arguments: Arguments) async throws -> String {
-        try await tools.listWindows()
+        try await toolResult { try await tools.listWindows() }
     }
 }
 
@@ -40,7 +83,7 @@ struct FindWindowTool: Tool {
     let tools: ScreenTools
 
     func call(arguments: Arguments) async throws -> String {
-        try await tools.findWindow(keywords: arguments.keywords)
+        try await toolResult { try await tools.findWindow(keywords: arguments.keywords) }
     }
 }
 
@@ -59,7 +102,25 @@ struct ReadWindowTool: Tool {
     let tools: ScreenTools
 
     func call(arguments: Arguments) async throws -> String {
-        try await tools.readWindow(titleOrProcess: arguments.window)
+        try await toolResult { try await tools.readWindow(titleOrProcess: arguments.window) }
+    }
+}
+
+@available(macOS 26.0, *)
+struct ReadSituationTool: Tool {
+    let name = "read_situation_messages"
+    let description =
+        "Read recent ambient observations about the user's desktop (last 10 minutes). Use when asked what has been happening; for what is on screen *right now*, prefer list_windows."
+
+    @Generable
+    struct Arguments {}
+
+    let store: SituationStore
+
+    func call(arguments: Arguments) async throws -> String {
+        let entries = store.read()
+        guard !entries.isEmpty else { return "No recent activity recorded." }
+        return ScreenTools.cap(entries.joined(separator: "\n"))
     }
 }
 
@@ -76,6 +137,16 @@ struct GoalVerdict {
     var met: Bool
     @Guide(description: "one short sentence justifying the decision")
     var reason: String
+}
+
+/// A Foundation Models failure phrased for a person.
+struct FoundationModelsFailure: LocalizedError, CustomStringConvertible {
+    let message: String
+    init(_ message: String) { self.message = message }
+    var errorDescription: String? { message }
+    /// The CLI interpolates errors directly; without this the user sees the
+    /// synthesised struct description instead of the sentence.
+    var description: String { message }
 }
 
 // MARK: - Backend
@@ -127,6 +198,11 @@ public final class FoundationModelsBackend: AgentBackend, @unchecked Sendable {
     private let logger = Logger("FoundationModels")
     private let screenTools: ScreenTools
 
+    /// Ambient observations, readable by the model through
+    /// `read_situation_messages` — the same contract the app-server backend
+    /// offers, with the same TTL and cap.
+    private let situation: SituationStore
+
     /// Rebuilt whenever instructions change (a session's instructions are fixed
     /// at construction) and on `reset()`.
     private var session: LanguageModelSession
@@ -159,16 +235,30 @@ public final class FoundationModelsBackend: AgentBackend, @unchecked Sendable {
     }
 
     private init(screenTools: ScreenTools) {
+        // Built as locals so the session can be assigned once. Tools need both
+        // of these, and `self` is not available until every stored property is
+        // initialised — hence the static builder rather than an instance method.
+        let situation = SituationStore()
         self.screenTools = screenTools
+        self.situation = situation
         self.session = LanguageModelSession(
-            tools: FoundationModelsBackend.tools(screenTools),
+            tools: Self.tools(screenTools: screenTools, situation: situation),
             instructions: ""
         )
         logger.info("on-device model ready")
     }
 
-    private static func tools(_ t: ScreenTools) -> [any Tool] {
-        [ListWindowsTool(tools: t), FindWindowTool(tools: t), ReadWindowTool(tools: t)]
+    private static func tools(screenTools: ScreenTools, situation: SituationStore) -> [any Tool] {
+        [
+            ListWindowsTool(tools: screenTools),
+            FindWindowTool(tools: screenTools),
+            ReadWindowTool(tools: screenTools),
+            ReadSituationTool(store: situation),
+        ]
+    }
+
+    private func makeTools() -> [any Tool] {
+        Self.tools(screenTools: screenTools, situation: situation)
     }
 
     // MARK: Instructions
@@ -179,7 +269,7 @@ public final class FoundationModelsBackend: AgentBackend, @unchecked Sendable {
     /// call this: see `turnInput(for:)` for why ambient context does not.
     private func rebuildSessionLocked() {
         session = LanguageModelSession(
-            tools: FoundationModelsBackend.tools(screenTools),
+            tools: makeTools(),
             instructions: buildInstructionsLocked()
         )
     }
@@ -207,7 +297,16 @@ public final class FoundationModelsBackend: AgentBackend, @unchecked Sendable {
         defer { sessionGate.release() }
 
         let session = locked { self.session }
-        let reply = try await session.respond(to: text)
+        let reply: LanguageModelSession.Response<String>
+        do {
+            reply = try await session.respond(to: text)
+        } catch {
+            // Catch everything, not just `GenerationError`. A tool-call failure
+            // or a bridged NSError is not that type, and letting one through
+            // reaches the user as a raw
+            // "Error Domain=FoundationModels…Code=-1 (null)" dump.
+            throw Self.readable(error)
+        }
         logTranscript()
         return Self.response(reply.content, contextPercent: contextPercent())
     }
@@ -240,6 +339,7 @@ public final class FoundationModelsBackend: AgentBackend, @unchecked Sendable {
         // never replace a session a turn is still responding on.
         await sessionGate.acquire()
         defer { sessionGate.release() }
+        situation.clear()
         locked { rebuildSessionLocked() }
     }
 
@@ -276,20 +376,18 @@ public final class FoundationModelsBackend: AgentBackend, @unchecked Sendable {
 
     // MARK: Ambient context
 
-    /// Deliberately ignored on this path.
+    /// Stored for the model to read through `read_situation_messages`, matching
+    /// the app-server backend.
     ///
-    /// The app-server backend needs ambient pushes because its Rust tools cannot
-    /// see the screen between turns. Here `list_windows` reads the *live* window
-    /// list on demand, so a buffered copy is both redundant and expensive
-    /// against a 4096-token window.
-    ///
-    /// It was worse than expensive: prepending the buffer to each turn as
+    /// Note what this must *not* do: prepending the buffer to each turn as
     /// "Recent screen activity: …\n\n<user text>" made a small model read the
     /// whole thing as one query *about the screen*. Every message — "hi", "how
     /// are you?" — came back as "I couldn't find any window displaying …".
-    /// Ambient context has to be something the model reaches for, not something
+    /// Ambient context is something the model reaches for, never something
     /// wrapped around what the user said.
-    public func pushSituationMessage(text: String, source: String, sessionId: String) {}
+    public func pushSituationMessage(text: String, source: String, sessionId: String) {
+        situation.push(text: text, source: source)
+    }
 
     // MARK: Goals
 
@@ -401,6 +499,50 @@ public final class FoundationModelsBackend: AgentBackend, @unchecked Sendable {
     /// `AgentResponse` is a UniFFI record shared with the app-server path. Token
     /// counts are zero: Apple exposes no tokenizer, and reporting a guess as a
     /// measurement would be worse than reporting nothing.
+    /// Turn a framework error into something a user can act on.
+    ///
+    /// These surfaced as raw `NSError` dumps —
+    /// "Error Domain=FoundationModels.LanguageModelSession.GenerationError
+    /// Code=-1 …" — which tells the user nothing. Context overflow matters most:
+    /// this model *throws* rather than truncating, and the remedy is `/reset`.
+    private static func readable(_ error: Error) -> Error {
+        guard let error = error as? LanguageModelSession.GenerationError else {
+            return FoundationModelsFailure(
+                "The on-device model failed to complete the turn (\(errorDetail(error))). "
+                    + "This is often transient — try again, or /reset if it persists."
+            )
+        }
+        switch error {
+        case .exceededContextWindowSize:
+            return FoundationModelsFailure(
+                "The on-device model ran out of context (4096 tokens, shared between "
+                    + "input and output). Use /reset to start a fresh conversation."
+            )
+        case .guardrailViolation, .refusal:
+            return FoundationModelsFailure(
+                "The on-device model declined to answer that. Rephrasing usually helps."
+            )
+        case .assetsUnavailable:
+            return FoundationModelsFailure(
+                "Apple Intelligence assets are unavailable — the model may still be "
+                    + "downloading. Check System Settings, or switch to another backend."
+            )
+        case .rateLimited:
+            return FoundationModelsFailure("The on-device model is rate limited; try again shortly.")
+        case .unsupportedLanguageOrLocale:
+            return FoundationModelsFailure(
+                "The on-device model does not support this language."
+            )
+        default:
+            // Includes transient token-generation failures, which do recover on a
+            // retry — say so rather than dumping the underlying NSError.
+            return FoundationModelsFailure(
+                "The on-device model failed to generate a reply (\(error)). This is often "
+                    + "transient; try again."
+            )
+        }
+    }
+
     private static func response(_ content: String, contextPercent: Float = 0) -> AgentResponse {
         AgentResponse(
             content: content,
