@@ -434,6 +434,7 @@ impl AppServerClient {
         developer_instructions: Option<&str>,
         approval_policy: Option<&str>,
         config: Option<Value>,
+        skill_paths: &[String],
     ) -> Result<String, AgentError> {
         let dynamic_tools: Vec<Value> = self
             .shared
@@ -462,6 +463,17 @@ impl AppServerClient {
         if let Some(policy) = approval_policy {
             params["approvalPolicy"] = json!(policy);
         }
+        // Our skills live wherever this repo puts them, which is none of the
+        // directories a backend searches on its own. Naming them here is what
+        // lets its skill-lookup tool agree with the catalog we inline — before
+        // this, that tool answered "none" and a model that consulted it decided
+        // it had no skills at all.
+        //
+        // A backend that does not know the field ignores it, so this is safe to
+        // send to any of them.
+        if !skill_paths.is_empty() {
+            params["skillPaths"] = json!(skill_paths);
+        }
         // codex nests MCP config under a free-form `config` table; the backend's
         // thread/start reads `config.mcp_servers` and connects them.
         if let Some(config) = config {
@@ -469,6 +481,26 @@ impl AppServerClient {
         }
 
         let resp = self.conn.request("thread/start", params)?;
+
+        // gallium answers with `skillCount`; codex does not. Report what came
+        // back so a path that landed nowhere is visible at thread start rather
+        // than as a model later claiming it has no skills.
+        if !skill_paths.is_empty() {
+            match resp.get("skillCount").and_then(Value::as_u64) {
+                Some(0) => tracing::warn!(
+                    "backend registered no skills from skillPaths {:?} — its skill-lookup tool \
+                     will report none",
+                    skill_paths
+                ),
+                Some(n) => tracing::info!("backend registered {} skill(s)", n),
+                // Older backend, or codex: it ignored the field. The inlined
+                // catalog still carries the skills, so this is not a failure.
+                None => tracing::debug!(
+                    "backend did not report skillCount; skillPaths may be unsupported"
+                ),
+            }
+        }
+
         thread_id_of(&resp).map(str::to_string).ok_or_else(|| {
             AgentError::InternalError(format!(
                 "thread/start named no thread (expected `thread.id` or `threadId`): {resp}"
@@ -486,9 +518,16 @@ impl AppServerClient {
         developer_instructions: Option<&str>,
         approval_policy: Option<&str>,
         config: Option<Value>,
+        skill_paths: &[String],
     ) -> Result<String, AgentError> {
-        let thread_id =
-            self.open_thread(cwd, model, developer_instructions, approval_policy, config)?;
+        let thread_id = self.open_thread(
+            cwd,
+            model,
+            developer_instructions,
+            approval_policy,
+            config,
+            skill_paths,
+        )?;
         *self.thread_id.lock() = Some(thread_id.clone());
         Ok(thread_id)
     }
@@ -754,7 +793,7 @@ mod tests {
             let ua = client.initialize("voice-agent-test").expect("initialize");
             assert!(ua.contains("voice-agent"), "userAgent: {ua}");
             client
-                .start_thread(None, None, None, Some("never"), None)
+                .start_thread(None, None, None, Some("never"), None, &[])
                 .expect("thread/start");
             let reply = client.run_turn("hi").expect("run_turn");
             let _ = done_tx.send((reply, called.load(Ordering::SeqCst)));
@@ -860,7 +899,7 @@ mod tests {
         let reply = within(10, move || {
             client.initialize("t").expect("initialize");
             client
-                .start_thread(None, None, None, Some("never"), None)
+                .start_thread(None, None, None, Some("never"), None, &[])
                 .expect("thread/start");
             client.run_turn("hi").expect("run_turn")
         });
@@ -878,7 +917,7 @@ mod tests {
         let reply = within(10, move || {
             client.initialize("t").expect("initialize");
             client
-                .start_thread(None, None, None, Some("never"), None)
+                .start_thread(None, None, None, Some("never"), None, &[])
                 .expect("thread/start");
             client.run_turn("hi").expect("run_turn")
         });
@@ -897,7 +936,7 @@ mod tests {
         let err = within(10, move || {
             client.initialize("t").expect("initialize");
             client
-                .start_thread(None, None, None, Some("never"), None)
+                .start_thread(None, None, None, Some("never"), None, &[])
                 .expect("thread/start");
             client.run_turn("hi").unwrap_err().to_string()
         });
@@ -915,7 +954,7 @@ mod tests {
         let reply = within(10, move || {
             client.initialize("t").expect("initialize");
             client
-                .start_thread(None, None, None, Some("never"), None)
+                .start_thread(None, None, None, Some("never"), None, &[])
                 .expect("thread/start");
             client.run_turn("hi").expect("interrupted is not an error")
         });
@@ -970,7 +1009,7 @@ mod tests {
         let err = within(10, move || {
             client.initialize("t").expect("initialize");
             client
-                .start_thread(None, None, None, Some("never"), None)
+                .start_thread(None, None, None, Some("never"), None, &[])
                 .expect("thread/start");
             client.run_turn("hi").unwrap_err().to_string()
         });
@@ -1079,7 +1118,7 @@ mod tests {
         std::thread::spawn(move || {
             client.initialize("voice-agent-test").expect("initialize");
             client
-                .start_thread(None, None, None, Some("untrusted"), None)
+                .start_thread(None, None, None, Some("untrusted"), None, &[])
                 .expect("thread/start");
             client.run_turn("tidy the notes").expect("run_turn");
             let _ = done_tx.send(());

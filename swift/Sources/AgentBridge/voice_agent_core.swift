@@ -940,11 +940,12 @@ public struct AgentConfig {
     public var reasoningEffort: String?
     public var inferenceEngine: String?
     public var backend: String?
+    public var skillPaths: [String]
     public var mcpServers: [McpServerConfig]
 
     // Default memberwise initializers are never public by default, so we
     // declare one manually.
-    public init(modelPath: String?, baseUrl: String?, model: String?, apiKey: String?, temperature: Float?, maxTokens: UInt32, language: String?, workingDir: String?, reasoningEffort: String?, inferenceEngine: String?, backend: String?, mcpServers: [McpServerConfig]) {
+    public init(modelPath: String?, baseUrl: String?, model: String?, apiKey: String?, temperature: Float?, maxTokens: UInt32, language: String?, workingDir: String?, reasoningEffort: String?, inferenceEngine: String?, backend: String?, skillPaths: [String], mcpServers: [McpServerConfig]) {
         self.modelPath = modelPath
         self.baseUrl = baseUrl
         self.model = model
@@ -956,6 +957,7 @@ public struct AgentConfig {
         self.reasoningEffort = reasoningEffort
         self.inferenceEngine = inferenceEngine
         self.backend = backend
+        self.skillPaths = skillPaths
         self.mcpServers = mcpServers
     }
 }
@@ -997,6 +999,9 @@ extension AgentConfig: Equatable, Hashable {
         if lhs.backend != rhs.backend {
             return false
         }
+        if lhs.skillPaths != rhs.skillPaths {
+            return false
+        }
         if lhs.mcpServers != rhs.mcpServers {
             return false
         }
@@ -1015,6 +1020,7 @@ extension AgentConfig: Equatable, Hashable {
         hasher.combine(reasoningEffort)
         hasher.combine(inferenceEngine)
         hasher.combine(backend)
+        hasher.combine(skillPaths)
         hasher.combine(mcpServers)
     }
 }
@@ -1038,6 +1044,7 @@ public struct FfiConverterTypeAgentConfig: FfiConverterRustBuffer {
                 reasoningEffort: FfiConverterOptionString.read(from: &buf), 
                 inferenceEngine: FfiConverterOptionString.read(from: &buf), 
                 backend: FfiConverterOptionString.read(from: &buf), 
+                skillPaths: FfiConverterSequenceString.read(from: &buf), 
                 mcpServers: FfiConverterSequenceTypeMcpServerConfig.read(from: &buf)
         )
     }
@@ -1054,6 +1061,7 @@ public struct FfiConverterTypeAgentConfig: FfiConverterRustBuffer {
         FfiConverterOptionString.write(value.reasoningEffort, into: &buf)
         FfiConverterOptionString.write(value.inferenceEngine, into: &buf)
         FfiConverterOptionString.write(value.backend, into: &buf)
+        FfiConverterSequenceString.write(value.skillPaths, into: &buf)
         FfiConverterSequenceTypeMcpServerConfig.write(value.mcpServers, into: &buf)
     }
 }

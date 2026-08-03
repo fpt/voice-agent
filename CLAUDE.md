@@ -147,7 +147,22 @@ Skills are `SKILL.md` files with YAML frontmatter loaded from:
 1. `skills/` directory (relative to config file's parent)
 2. `~/.claude/plugins/` (recursive)
 
-A skill's catalog is injected into the backend thread's developer instructions.
+A skill's catalog is injected into the backend thread's developer instructions,
+**and** the resolved absolute paths are sent as `thread/start`'s `skillPaths` so
+the backend registers them in its own skill store.
+
+Both are needed. The instructions carry the skills to any backend; `skillPaths`
+is what makes the backend's *own* skill-lookup tool agree with them. Without it
+that tool searches only its own directories (`~/.config/gallium/skills`,
+`<cwd>/.claude/skills`, …), never `skillPaths`, and answers "none" — which reads
+to a model as "no skills exist". One asked what tools it had, consulted the
+lookup tool, and replied "I don't have any registered tools or skills" while
+holding sixteen tools and two skills.
+
+gallium answers `thread/start` with `skillCount`; a zero when paths were sent is
+logged as a warning, since a path that landed nowhere is otherwise invisible
+until a model says it has nothing. A backend that does not know the field
+ignores it and the inlined catalog still works.
 
 ## Build & Run
 

@@ -55,6 +55,9 @@ var agentConfig = new AgentConfig(
     @reasoningEffort: cfg.Llm.ReasoningEffort,
     @inferenceEngine: cfg.Llm.InferenceEngine,
     @backend: cfg.Backend,
+    // Empty: this frontend has no skill loader, so it has no skills to name.
+    // The Rust side omits the field entirely when the list is empty.
+    @skillPaths: new List<string>(),
     @mcpServers: mcpServers);
 
 Agent agent;

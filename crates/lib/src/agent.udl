@@ -49,6 +49,11 @@ dictionary AgentConfig {
     // Backend agent program to spawn ("gallium", "codex", or "prog arg1 arg2").
     // The `VOICE_AGENT_BACKEND` env var overrides it; default is "gallium".
     string? backend;
+    // Absolute directories (or SKILL.md files) holding this client's skills,
+    // sent to the backend on thread/start so its own skill-lookup tool can see
+    // them. Resolved frontend-side, because they are relative to the config
+    // file, not to the working directory.
+    sequence<string> skill_paths;
     sequence<McpServerConfig> mcp_servers;
 };
 

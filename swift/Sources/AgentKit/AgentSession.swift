@@ -66,6 +66,24 @@ public class AgentSession: @unchecked Sendable {
             }
         }
 
+        // Skill locations, made absolute for the backend.
+        //
+        // Ours are relative to the *config file*; the backend resolves a relative
+        // entry against the thread's working directory, which is somewhere else
+        // entirely. Sending absolute paths removes the ambiguity — and the
+        // backend needs them because none of the directories it searches on its
+        // own (`~/.config/gallium/skills`, `<cwd>/.claude/skills`, …) is where
+        // this repo keeps skills.
+        let configDirectory = URL(fileURLWithPath: configPath).deletingLastPathComponent()
+        let resolvedSkillPaths = (config.agent.skillPaths ?? ["skills"]).map { path -> String in
+            // `standardizedFileURL`, not `standardized`: the latter resolves
+            // "configs/../skills" to "/skills" — an absolute path to the wrong
+            // place, which loads nothing and looks like a missing skills dir.
+            path.hasPrefix("/")
+                ? path
+                : configDirectory.appendingPathComponent(path).standardizedFileURL.path
+        }
+
         let mcpServers = (config.mcpServers ?? []).map {
             McpServerConfig(command: $0.command ?? "", args: $0.args ?? [], url: $0.url)
         }
@@ -84,6 +102,7 @@ public class AgentSession: @unchecked Sendable {
             // below and never reaches this path, because an unavailable one is
             // now fatal rather than a fallback to Rust's default.
             backend: config.backend,
+            skillPaths: resolvedSkillPaths,
             mcpServers: mcpServers
         )
 
@@ -177,9 +196,8 @@ public class AgentSession: @unchecked Sendable {
         }
 
         // Load skills from configured paths (relative to config dir)
-        let configDir = URL(fileURLWithPath: configPath).deletingLastPathComponent().path
-        let skillPaths = config.agent.skillPaths ?? ["skills"]
-        let discoveredSkills = SkillLoader.loadAll(paths: skillPaths, baseDir: configDir)
+        let skillPaths = resolvedSkillPaths
+        let discoveredSkills = SkillLoader.loadAll(paths: skillPaths, baseDir: "/")
         for skill in discoveredSkills {
             await backend.addSkill(name: skill.name, description: skill.description, prompt: skill.prompt)
         }
