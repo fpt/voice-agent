@@ -65,21 +65,8 @@ impl SkillRegistry {
         }
         let mut entries: Vec<&Skill> = skills.values().collect();
         entries.sort_by(|a, b| a.name.cmp(&b.name));
-        // Say plainly that these are already here.
-        //
-        // The backend has its own skill store behind a `LookupSkill`-style tool,
-        // loaded from *its* directories (`~/.config/gallium/skills`,
-        // `<cwd>/.claude/skills`, …) — never from voice-agent's `skillPaths`. So
-        // that tool reports "none" no matter what is inlined below, and a model
-        // that consults it concludes it has nothing: one asked "what tools do you
-        // have?", called LookupSkill, was told the set was empty, and answered
-        // "I don't have any registered tools or skills" while holding sixteen
-        // tools and these two skills in context.
         let mut out = String::from(
-            "Available skills — their full instructions are already included here, so use them \
-             directly and do not look them up with a tool. A skill-lookup tool, if you have one, \
-             reports a different set local to the backend and will not list these. Apply the \
-             relevant one when it fits the request:\n",
+            "Available skills — apply the relevant one's instructions when it fits the request:\n",
         );
         for s in entries {
             out.push_str(&format!(
@@ -94,33 +81,6 @@ impl SkillRegistry {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    /// The catalog has to stand on its own.
-    ///
-    /// The backend's skill-lookup tool reads its own directories and will report
-    /// an empty set no matter what is inlined here, so the text must tell the
-    /// model these are already present and not to go looking. A model that did
-    /// look concluded it had no tools at all.
-    #[test]
-    fn catalog_tells_the_model_not_to_look_skills_up() {
-        let registry = SkillRegistry::new();
-        registry.add(
-            "desk-activity".into(),
-            "Connect the screen to a task board".into(),
-            "Look at the desktop and report.".into(),
-        );
-        let catalog = registry.catalog().expect("a skill was registered");
-
-        assert!(catalog.contains("already included"), "{catalog}");
-        assert!(catalog.contains("do not look them up"), "{catalog}");
-        // The body still has to be there — it is the reason inlining is worth
-        // the tokens at all.
-        assert!(
-            catalog.contains("Look at the desktop and report."),
-            "{catalog}"
-        );
-        assert!(catalog.contains("desk-activity"), "{catalog}");
-    }
 
     #[test]
     fn test_skill_registry() {
