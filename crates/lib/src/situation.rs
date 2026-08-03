@@ -24,20 +24,34 @@ pub struct SituationMessage {
     created: Instant,
 }
 
-/// Volatile message store with time-based expiry.
-///
-/// Messages auto-expire after `ttl`. No max-count compaction.
+/// Volatile message store with time-based expiry and a hard count cap.
 /// Thread-safe via internal `Mutex`.
 pub struct SituationMessages {
     messages: Mutex<Vec<SituationMessage>>,
     ttl: Duration,
+    /// Upper bound on retained messages, oldest dropped first.
+    ///
+    /// TTL alone does not bound the store: a producer polling every 30s against
+    /// a 10-minute window keeps twenty entries alive, and the agent reads all of
+    /// them. Producers should also avoid pushing unchanged observations — the
+    /// window-list poller dedupes — but a cap means a chatty one degrades the
+    /// context budget instead of destroying it.
+    max_messages: usize,
 }
+
+/// Default retained-message cap. See [`SituationMessages::max_messages`].
+pub const DEFAULT_MAX_MESSAGES: usize = 20;
 
 impl SituationMessages {
     pub fn new(ttl: Duration) -> Self {
+        Self::with_capacity(ttl, DEFAULT_MAX_MESSAGES)
+    }
+
+    pub fn with_capacity(ttl: Duration, max_messages: usize) -> Self {
         Self {
             messages: Mutex::new(Vec::new()),
             ttl,
+            max_messages: max_messages.max(1),
         }
     }
 
@@ -53,6 +67,10 @@ impl SituationMessages {
             timestamp: SystemTime::now(),
             created: now,
         });
+        if msgs.len() > self.max_messages {
+            let excess = msgs.len() - self.max_messages;
+            msgs.drain(0..excess);
+        }
     }
 
     /// Return all non-expired messages (oldest first).
@@ -295,6 +313,32 @@ mod tests {
         let all = store.read_all();
         assert_eq!(all.len(), 2);
         assert!(all[0].text.contains("main.rs"));
+    }
+
+    /// TTL alone does not bound the store. The window-list poller runs every
+    /// 30s against a 10-minute window, so twenty snapshots stay alive and the
+    /// agent reads all of them — which is what made ambient context overwhelming
+    /// before the producer deduped and this cap existed.
+    #[test]
+    fn caps_retained_messages_oldest_first() {
+        let store = SituationMessages::with_capacity(Duration::from_secs(600), 3);
+        for i in 0..10 {
+            store.push(format!("entry {i}"), "screen".into(), String::new());
+        }
+        let msgs = store.read_all();
+        assert_eq!(msgs.len(), 3, "the cap must bound the store");
+        assert_eq!(msgs[0].text, "entry 7", "oldest dropped first");
+        assert_eq!(msgs[2].text, "entry 9");
+    }
+
+    /// The default the Swift twin (`SituationStore`) mirrors.
+    #[test]
+    fn default_store_is_capped() {
+        let store = SituationMessages::default();
+        for i in 0..500 {
+            store.push(format!("poll {i}"), "screen".into(), String::new());
+        }
+        assert_eq!(store.read_all().len(), DEFAULT_MAX_MESSAGES);
     }
 
     #[test]

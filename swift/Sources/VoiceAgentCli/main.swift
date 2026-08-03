@@ -195,15 +195,25 @@ if sttConfig.enabled && !forceText && oneShotPrompt == nil {
 // Start background event sources (currently a no-op).
 session.start()
 
-// Periodic window list (every 30s) -> situation message
+// Periodic window list (every 30s) -> situation message.
+//
+// Only pushed when the list actually *changed*. Pushing unconditionally meant a
+// snapshot every 30s against a 10-minute window — twenty near-identical copies
+// of the same window titles, which is what the agent then read back. Desktops
+// are mostly static, so deduping at the source is what keeps the store small;
+// the count cap on the other side is only a backstop.
 let wm = WindowManager()
 let windowListPoller = Task { @MainActor in
+    var lastPushed: String? = nil
     while !Task.isCancelled {
         if let list = try? await wm.listWindows() {
-            let text = list.map { $0.summary }.joined(separator: "\n")
-            session.backend.pushSituationMessage(
-                text: "[screen] Windows:\n\(text)", source: "screen", sessionId: ""
-            )
+            let text = "[screen] Windows:\n" + list.map { $0.summary }.joined(separator: "\n")
+            if text != lastPushed {
+                lastPushed = text
+                session.backend.pushSituationMessage(
+                    text: text, source: "screen", sessionId: ""
+                )
+            }
         }
         try? await Task.sleep(for: .seconds(30))
     }

@@ -170,15 +170,14 @@ Two things worth knowing about the implementation:
   ambient situation in the instructions: folding it in there silently wiped the
   conversation every 30 seconds, which is how often the frontend pushes a window
   list.
-- **Ambient situation is ignored on this path entirely.** Moving it into the
-  *turn input* instead fixed the wipe but broke something worse: prefixing every
-  turn with "Recent screen activity: …" made the model read the whole turn as a
-  query *about the screen*. "hi" came back as "I couldn't find any window
-  displaying the text 'hi'". A small model does not reliably separate framing
-  from the user's words. `list_windows` reads the live window list on demand and
-  is strictly better than a stale buffered copy, so `pushSituationMessage` is a
-  no-op here — ambient context is something the model reaches for, not something
-  wrapped around what the user said.
+- **Ambient situation is a tool, never a prefix.** Moving it into the *turn
+  input* fixed the wipe but broke something worse: prefixing every turn with
+  "Recent screen activity: …" made the model read the whole turn as a query
+  *about the screen*. "hi" came back as "I couldn't find any window displaying
+  the text 'hi'". A small model does not reliably separate framing from the
+  user's words. It is now `read_situation_messages`, matching the app-server
+  backend — something the model reaches for, never something wrapped around what
+  the user said.
 - The backend is `@MainActor`-isolated rather than `@unchecked Sendable`: it
   holds mutable state touched by both the poller and turn execution, and its
   tools are MainActor-bound regardless.
@@ -197,6 +196,33 @@ tool-output cap). What is left, in the order the measurements suggest:
 - **A real token count.** Everything above is `chars / 4`; Apple exposes no
   tokenizer. Newer SDKs are reported to add `tokenCount(for:)` — worth adopting
   when available, since overflow throws rather than truncates.
+
+## Ambient situation, on both backends
+
+The two paths now behave identically, which took bounding the producer as well as
+the store:
+
+- The window-list poller only pushes when the list **changed**. It used to push
+  unconditionally every 30 s against a 10-minute window — twenty near-identical
+  copies of the same titles, all of which the agent read back. Desktops are
+  mostly static, so deduping at the source is what actually keeps this small.
+- Both stores cap retained messages at **20** (`DEFAULT_MAX_MESSAGES` /
+  `SituationStore.defaultMaxMessages`) on top of the 600 s TTL. Time alone bounds
+  nothing against a fast producer; the cap means a chatty one degrades the
+  context budget instead of destroying it.
+- Both expose the same `read_situation_messages` tool. The Foundation Models
+  version takes no arguments — the app-server one's session filtering and
+  pagination are Claude-Code-specific and not worth the schema against a 4096
+  token window.
+
+## Errors
+
+Framework failures used to reach the user as raw `NSError` dumps
+("Error Domain=FoundationModels.LanguageModelSession.GenerationError Code=-1 …").
+`GenerationError` is now mapped to something actionable, most importantly
+`exceededContextWindowSize` → "use /reset", since this model throws rather than
+truncating. Transient token-generation failures are named as transient, because
+they are: the same prompt succeeds on a retry.
 
 ## Risks
 
