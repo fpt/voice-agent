@@ -1,5 +1,5 @@
 import Foundation
-import AgentBridge
+import AgentCore
 
 /// Recurring `/loop` mode, modelled on Claude Code's `/loop`: run a prompt (or a
 /// slash command) on a recurring cadence as a **normal agent turn** — full tools,

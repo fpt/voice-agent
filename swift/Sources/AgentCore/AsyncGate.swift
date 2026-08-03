@@ -13,7 +13,7 @@ import Foundation
 /// early version that both set the flag *and* re-contended deadlocked against
 /// itself. `release()` is synchronous so callers can `defer` it and free the
 /// gate on every path, thrown errors included.
-final class AsyncGate: @unchecked Sendable {
+public final class AsyncGate: @unchecked Sendable {
 
     private let lock = NSLock()
     private var busy = false
@@ -22,7 +22,9 @@ final class AsyncGate: @unchecked Sendable {
 
     /// Suspend until the gate is free, then take it. On return the caller owns
     /// it and must `release()` exactly once.
-    func acquire() async {
+    public init() {}
+
+    public func acquire() async {
         await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
             lock.lock()
             if busy {
@@ -37,7 +39,7 @@ final class AsyncGate: @unchecked Sendable {
     }
 
     /// Hand the gate to the next waiter, or free it when nobody is waiting.
-    func release() {
+    public func release() {
         lock.lock()
         if waiters.isEmpty {
             busy = false

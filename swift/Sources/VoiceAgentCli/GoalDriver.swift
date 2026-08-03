@@ -1,5 +1,5 @@
 import Foundation
-import AgentBridge
+import AgentCore
 import AgentKit
 
 /// `/goal` driver, modelled on Claude Code's `/goal`: set a completion condition

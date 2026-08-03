@@ -53,13 +53,39 @@ the split (voice-agent = platform + app-server client; the agent core lives in
 
 | Package | Purpose |
 |---------|---------|
+| `AgentCore` | **Platform-neutral.** Domain types (`AgentResponse`, `GoalStatus`, `GoalEvaluation`, `CaptureRequest`), the `AgentBackend` protocol, the `EnvironmentPerception` protocol, `AsyncGate`, `SituationStore`. No Rust, no AppKit — builds for iOS. |
+| `FoundationModelsKit` | **Platform-neutral.** `FoundationModelsBackend`: the on-device model, in-process. Perception is injected, so it does not know what a window is. |
+| `AgentKit` | `AgentSession` (lifecycle: config, skills, TTS, backend selection) and `AppServerBackend`. **The Rust cdylib dependency stops here** — this is the only place UniFFI types are mapped to `AgentCore`'s. macOS. |
 | `VoiceAgentCli` | Main entry point (text/voice REPL), window-list + capture pollers |
-| `AgentKit` | `AgentSession` — shared agent lifecycle (init, skills, TTS) usable from CLI/iOS. `AgentBackend` is the seam the frontend talks to; `AppServerBackend` is the implementation that drives a spawned app-server. See **[docs/FOUNDATION_MODELS.md](docs/FOUNDATION_MODELS.md)**. |
-| `Audio` | AudioCapture (mic -> SpeechTranscriber), VoiceProcessingIO |
-| `TTS` | AVSpeechSynthesizer wrapper |
-| `ScreenCapture` | WindowManager / window info for the capture client tools |
-| `Util` | Config, Logger, SkillLoader |
+| `Audio` | AudioCapture (mic -> SpeechTranscriber), VoiceProcessingIO. iOS-capable. |
+| `TTS` | AVSpeechSynthesizer wrapper. iOS-capable. |
+| `ScreenCapture` | WindowManager / OCR, plus `ScreenPerception` — the macOS `EnvironmentPerception`. macOS only (AppKit / ScreenCaptureKit). |
+| `Util` | Config, Logger, SkillLoader. iOS-capable. |
 | `AgentBridge` | Generated UniFFI Swift bindings |
+
+### Building another frontend (e.g. an iOS app)
+
+The package exposes library products so an app can take only the platform-neutral
+pieces: `AgentCore`, `FoundationModelsKit`, `VoiceAgentAudio`, `VoiceAgentTTS`,
+`VoiceAgentUtil`. None of them link the Rust cdylib or touch AppKit.
+
+Swap perception rather than forking the backend. `EnvironmentPerception` has
+three operations, and each implementation supplies its own model-facing tool
+names — "list_windows" is wrong wording for a phone, and a model given accurate
+names uses them far more reliably:
+
+| | macOS (`ScreenPerception`) | iOS (a camera implementation) |
+|---|---|---|
+| `overview()` | list open windows | describe the scene |
+| `find(_:)` | match a window by keywords | locate an object |
+| `read(_:)` | OCR a window | OCR what the camera sees |
+
+```swift
+let backend = try FoundationModelsBackend.make(perception: CameraPerception())
+```
+
+Verified by building a probe package for `arm64-apple-ios26.0` against the iPhone
+SDK with exactly that shape.
 | `AgentBridgeFFI` | C module map for FFI |
 
 ### Key Patterns

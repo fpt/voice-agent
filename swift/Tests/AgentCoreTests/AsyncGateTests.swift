@@ -1,6 +1,6 @@
 import XCTest
 
-@testable import AgentKit
+@testable import AgentCore
 
 /// `AsyncGate` is what keeps two turns from calling `respond` on one
 /// `LanguageModelSession`, and keeps `reset` from swapping a session out from

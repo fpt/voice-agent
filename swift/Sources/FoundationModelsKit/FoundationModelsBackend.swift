@@ -1,4 +1,4 @@
-import AgentBridge
+import AgentCore
 import Foundation
 import Util
 
@@ -50,63 +50,65 @@ func errorDetail(_ error: Error) -> String {
     return parts.joined(separator: " / ")
 }
 
-/// Screen tools exposed to the model. Each calls ``ScreenTools`` directly —
-/// there is no capture bridge and no poller on this path.
+/// Perception tools exposed to the model. Each calls the injected
+/// ``EnvironmentPerception`` directly — there is no capture bridge and no poller
+/// on this path.
 
-@available(macOS 26.0, *)
-struct ListWindowsTool: Tool {
-    let name = "list_windows"
-    let description =
-        "List the user's currently open windows (app name and title). Use this first to see what they are working on."
+/// The three perception tools are written once against ``EnvironmentPerception``
+/// and named by whatever implements it, so the same backend serves a Mac looking
+/// at windows and a phone looking through a camera.
+@available(macOS 26.0, iOS 26.0, *)
+struct OverviewTool: Tool {
+    let name: String
+    let description: String
 
     @Generable
     struct Arguments {}
 
-    let tools: ScreenTools
+    let perception: any EnvironmentPerception
 
     func call(arguments: Arguments) async throws -> String {
-        try await toolResult { try await tools.listWindows() }
+        try await toolResult { try await perception.overview() }
     }
 }
 
-@available(macOS 26.0, *)
-struct FindWindowTool: Tool {
-    let name = "find_window"
-    let description = "Find open windows whose app name or title matches some keywords."
+@available(macOS 26.0, iOS 26.0, *)
+struct FindTool: Tool {
+    let name: String
+    let description: String
 
     @Generable
     struct Arguments {
-        @Guide(description: "Words to match against window titles and app names")
+        @Guide(description: "What to look for")
         var keywords: String
     }
 
-    let tools: ScreenTools
+    let perception: any EnvironmentPerception
 
     func call(arguments: Arguments) async throws -> String {
-        try await toolResult { try await tools.findWindow(keywords: arguments.keywords) }
+        try await toolResult { try await perception.find(arguments.keywords) }
     }
 }
 
-@available(macOS 26.0, *)
-struct ReadWindowTool: Tool {
-    let name = "read_window"
-    let description =
-        "Read the visible text of a window by its title or app name, via OCR. Results are truncated, so prefer a specific window."
+@available(macOS 26.0, iOS 26.0, *)
+struct ReadTool: Tool {
+    let name: String
+    let description: String
 
     @Generable
     struct Arguments {
-        @Guide(description: "Title or app name of the window to read")
-        var window: String
+        @Guide(description: "What to read text from")
+        var target: String
     }
 
-    let tools: ScreenTools
+    let perception: any EnvironmentPerception
 
     func call(arguments: Arguments) async throws -> String {
-        try await toolResult { try await tools.readWindow(titleOrProcess: arguments.window) }
+        try await toolResult { try await perception.read(arguments.target) }
     }
 }
 
-@available(macOS 26.0, *)
+@available(macOS 26.0, iOS 26.0, *)
 struct ReadSituationTool: Tool {
     let name = "read_situation_messages"
     let description =
@@ -120,7 +122,7 @@ struct ReadSituationTool: Tool {
     func call(arguments: Arguments) async throws -> String {
         let entries = store.read()
         guard !entries.isEmpty else { return "No recent activity recorded." }
-        return ScreenTools.cap(entries.joined(separator: "\n"))
+        return PerceptionLimits.cap(entries.joined(separator: "\n"))
     }
 }
 
@@ -130,7 +132,7 @@ struct ReadSituationTool: Tool {
 /// yes/no in prose and then parses it leniently — strip `<think>`, try to
 /// extract JSON, fall back to a leading YES/NO, default to "not met" when
 /// ambiguous. None of that is needed when the type is guaranteed.
-@available(macOS 26.0, *)
+@available(macOS 26.0, iOS 26.0, *)
 @Generable
 struct GoalVerdict {
     @Guide(description: "true only if the condition is clearly satisfied")
@@ -169,7 +171,7 @@ struct FoundationModelsFailure: LocalizedError, CustomStringConvertible {
 /// `Sendable` and Swift will not form an actor-isolated conformance to a
 /// Sendable-inheriting protocol. So the synchronisation is explicit, and
 /// `@unchecked` is backed by the lock rather than by assertion.
-@available(macOS 26.0, *)
+@available(macOS 26.0, iOS 26.0, *)
 public final class FoundationModelsBackend: AgentBackend, @unchecked Sendable {
 
     /// Guards short reads and writes of the stored properties below. Never held
@@ -196,7 +198,7 @@ public final class FoundationModelsBackend: AgentBackend, @unchecked Sendable {
     }
 
     private let logger = Logger("FoundationModels")
-    private let screenTools: ScreenTools
+    private let perception: any EnvironmentPerception
 
     /// Ambient observations, readable by the model through
     /// `read_situation_messages` — the same contract the app-server backend
@@ -221,11 +223,11 @@ public final class FoundationModelsBackend: AgentBackend, @unchecked Sendable {
     /// backend than the config named turns a misconfiguration into a mystery:
     /// the session runs, answers differently, and the only clue is one warning
     /// line above the banner.
-    public static func make(screenTools: ScreenTools) throws -> FoundationModelsBackend {
+    public static func make(perception: any EnvironmentPerception) throws -> FoundationModelsBackend {
         let model = SystemLanguageModel.default
         switch model.availability {
         case .available:
-            return FoundationModelsBackend(screenTools: screenTools)
+            return FoundationModelsBackend(perception: perception)
         case .unavailable(let reason):
             throw FoundationModelsFailure(unavailableMessage(reason))
         @unknown default:
@@ -258,31 +260,34 @@ public final class FoundationModelsBackend: AgentBackend, @unchecked Sendable {
         + "To use a different backend, set `backend:` in the config "
         + "(e.g. \"gallium\" or \"codex\") or export VOICE_AGENT_BACKEND."
 
-    private init(screenTools: ScreenTools) {
+    private init(perception: any EnvironmentPerception) {
         // Built as locals so the session can be assigned once. Tools need both
         // of these, and `self` is not available until every stored property is
         // initialised — hence the static builder rather than an instance method.
         let situation = SituationStore()
-        self.screenTools = screenTools
+        self.perception = perception
         self.situation = situation
         self.session = LanguageModelSession(
-            tools: Self.tools(screenTools: screenTools, situation: situation),
+            tools: Self.tools(perception: perception, situation: situation),
             instructions: ""
         )
         logger.info("on-device model ready")
     }
 
-    private static func tools(screenTools: ScreenTools, situation: SituationStore) -> [any Tool] {
-        [
-            ListWindowsTool(tools: screenTools),
-            FindWindowTool(tools: screenTools),
-            ReadWindowTool(tools: screenTools),
+    private static func tools(
+        perception: any EnvironmentPerception, situation: SituationStore
+    ) -> [any Tool] {
+        let d = perception.descriptions
+        return [
+            OverviewTool(name: d.overviewName, description: d.overviewDescription, perception: perception),
+            FindTool(name: d.findName, description: d.findDescription, perception: perception),
+            ReadTool(name: d.readName, description: d.readDescription, perception: perception),
             ReadSituationTool(store: situation),
         ]
     }
 
     private func makeTools() -> [any Tool] {
-        Self.tools(screenTools: screenTools, situation: situation)
+        Self.tools(perception: perception, situation: situation)
     }
 
     // MARK: Instructions

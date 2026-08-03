@@ -1,7 +1,7 @@
 import Foundation
 import CoreGraphics
 import Util
-import AgentBridge
+import AgentCore
 import AgentKit
 import CEditline
 import TTS

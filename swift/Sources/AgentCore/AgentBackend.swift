@@ -1,4 +1,3 @@
-import AgentBridge
 import Foundation
 
 /// What a frontend may ask of *any* agent, regardless of who runs the model.
