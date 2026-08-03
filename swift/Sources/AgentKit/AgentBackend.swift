@@ -57,6 +57,13 @@ public protocol AgentBackend: AnyObject, Sendable {
 
     // MARK: Optional capabilities
 
+    /// How to describe this backend to the user at startup. The frontend cannot
+    /// infer it from the config: a config with no `baseURL` may be a local
+    /// app-server *or* the in-process on-device model, and guessing produced a
+    /// banner that announced "gallium backend" while Foundation Models was
+    /// running.
+    var backendDescription: BackendDescription { get }
+
     /// Non-nil only when the backend executes its tools *out of process* and so
     /// needs the frontend to service screen-capture requests on its behalf.
     ///
@@ -66,6 +73,19 @@ public protocol AgentBackend: AnyObject, Sendable {
     /// APIs directly and returns `nil` here — no bridge, no poller, no 100 ms
     /// latency floor.
     var screenBridge: ScreenCaptureBridging? { get }
+}
+
+/// What the startup banner shows about the agent behind this session.
+public struct BackendDescription: Sendable {
+    /// The model, as far as the frontend can honestly state it.
+    public let model: String
+    /// Where inference happens.
+    public let endpoint: String
+
+    public init(model: String, endpoint: String) {
+        self.model = model
+        self.endpoint = endpoint
+    }
 }
 
 /// The request/response bridge an out-of-process backend needs to reach macOS

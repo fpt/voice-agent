@@ -166,10 +166,19 @@ Turn latency is ~2 s, against gallium's ~90 s model load plus ~15 s per turn.
 Two things worth knowing about the implementation:
 
 - A session's instructions are **fixed at construction**, so changing them means
-  a new session — and a new session has no transcript. Ambient situation
-  therefore rides along with the *turn input*, never the instructions. Folding
-  it into instructions silently wiped the conversation every 30 seconds, which
-  is how often the frontend pushes a window list.
+  a new session — and a new session has no transcript. That ruled out carrying
+  ambient situation in the instructions: folding it in there silently wiped the
+  conversation every 30 seconds, which is how often the frontend pushes a window
+  list.
+- **Ambient situation is ignored on this path entirely.** Moving it into the
+  *turn input* instead fixed the wipe but broke something worse: prefixing every
+  turn with "Recent screen activity: …" made the model read the whole turn as a
+  query *about the screen*. "hi" came back as "I couldn't find any window
+  displaying the text 'hi'". A small model does not reliably separate framing
+  from the user's words. `list_windows` reads the live window list on demand and
+  is strictly better than a stale buffered copy, so `pushSituationMessage` is a
+  no-op here — ambient context is something the model reaches for, not something
+  wrapped around what the user said.
 - The backend is `@MainActor`-isolated rather than `@unchecked Sendable`: it
   holds mutable state touched by both the poller and turn execution, and its
   tools are MainActor-bound regardless.

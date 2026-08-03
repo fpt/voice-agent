@@ -100,7 +100,11 @@ public class AgentSession: @unchecked Sendable {
             self.backend = fm
         } else {
             let agent = try agentNew(config: agentConfig, approver: approver)
-            self.backend = AppServerBackend(agent: agent)
+            self.backend = AppServerBackend(
+                agent: agent,
+                program: Self.effectiveBackendProgram(config.backend),
+                model: config.llm.model ?? config.llm.modelPath
+            )
         }
         logger.info("Agent initialized")
 
@@ -162,6 +166,31 @@ public class AgentSession: @unchecked Sendable {
     }
 
     // MARK: - Lifecycle
+
+    /// The program Rust will spawn, mirroring `resolve_backend`'s precedence:
+    /// `VOICE_AGENT_BACKEND` → config `backend:` → `gallium`. For display only —
+    /// Rust does the real resolution and logs which source won.
+    static func effectiveBackendProgram(_ configured: String?) -> String {
+        resolveBackendProgram(
+            env: ProcessInfo.processInfo.environment["VOICE_AGENT_BACKEND"],
+            configured: configured
+        )
+    }
+
+    /// The pure half, so the precedence can be tested without mutating
+    /// process-global environment from parallel tests — the same split as
+    /// `resolve_backend` on the Rust side.
+    static func resolveBackendProgram(env: String?, configured: String?) -> String {
+        // A request for the in-process backend that reached here means it was
+        // unavailable and we fell back, so it never names the program.
+        let candidates = [env, wantsFoundationModels(configured) ? nil : configured]
+        for candidate in candidates {
+            if let spec = candidate?.trimmingCharacters(in: .whitespaces), !spec.isEmpty {
+                return spec.split(separator: " ").first.map(String.init) ?? "gallium"
+            }
+        }
+        return "gallium"
+    }
 
     /// Whether the config asks for the in-process Foundation Models backend.
     /// Everything else names a program to spawn and is resolved in Rust.

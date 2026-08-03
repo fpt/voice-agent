@@ -133,11 +133,6 @@ public final class FoundationModelsBackend: AgentBackend, @unchecked Sendable {
     private var systemPrompt: String = ""
     private var skills: [(name: String, description: String)] = []
 
-    /// Ambient observations, newest last. Bounded hard: this is context the model
-    /// pays for on every turn.
-    private var situation: [String] = []
-    private static let maxSituationEntries = 3
-
     private var goalCondition: String?
     private var goalStartedAt: Date?
     private var goalTurns: UInt32 = 0
@@ -211,35 +206,28 @@ public final class FoundationModelsBackend: AgentBackend, @unchecked Sendable {
         await sessionGate.acquire()
         defer { sessionGate.release() }
 
-        let (session, input) = locked { (self.session, self.consumeSituationLocked(text)) }
-        let reply = try await session.respond(to: input)
+        let session = locked { self.session }
+        let reply = try await session.respond(to: text)
         logTranscript()
-        return Self.response(reply.content)
+        return Self.response(reply.content, contextPercent: contextPercent())
     }
 
-    /// Ambient observations ride along with the *turn*, never the instructions.
-    ///
-    /// A session's instructions are fixed at construction, so folding situation
-    /// into them meant rebuilding the session on every push — and the frontend
-    /// pushes a window list every 30 seconds, which silently wiped the
-    /// conversation mid-chat. Consumed once: it is context about *now*.
-    private func consumeSituationLocked(_ text: String) -> String {
-        guard !situation.isEmpty else { return text }
-        let ambient = situation.joined(separator: "\n")
-        situation.removeAll()
-        return "Recent screen activity:\n\(ambient)\n\n\(text)"
+    /// Share of the window the transcript occupies, 0-100. Estimated at ~4
+    /// chars/token — Apple exposes no tokenizer — but the trend is what matters,
+    /// and overflow is an error rather than a truncation.
+    private func contextPercent() -> Float {
+        let session = locked { self.session }
+        let chars = session.transcript.reduce(0) { $0 + String(describing: $1).count }
+        return Float(chars / 4) / Float(Self.contextWindowTokens) * 100
     }
 
-    /// Report how much of the window the transcript now occupies. Estimated —
-    /// Apple exposes no tokenizer — but the trend is what matters, and overflow
-    /// is an error rather than a truncation, so it is worth watching.
+    private static let contextWindowTokens = 4096
+
     private func logTranscript() {
         let session = locked { self.session }
-        let chars = session.transcript.reduce(0) { total, entry in
-            total + String(describing: entry).count
-        }
+        let chars = session.transcript.reduce(0) { $0 + String(describing: $1).count }
         let approxTokens = chars / 4
-        let pct = Int(Double(approxTokens) / 4096.0 * 100)
+        let pct = Int(Double(approxTokens) / Double(Self.contextWindowTokens) * 100)
         logger.info("transcript ≈\(approxTokens) tokens (~\(pct)% of 4096), \(session.transcript.count) entries")
         if pct > 70 {
             logger.warning("context is filling up; a turn that overflows will fail rather than truncate")
@@ -252,10 +240,7 @@ public final class FoundationModelsBackend: AgentBackend, @unchecked Sendable {
         // never replace a session a turn is still responding on.
         await sessionGate.acquire()
         defer { sessionGate.release() }
-        locked {
-            situation.removeAll()
-            rebuildSessionLocked()
-        }
+        locked { rebuildSessionLocked() }
     }
 
     public func conversationHistory() async -> String {
@@ -291,14 +276,20 @@ public final class FoundationModelsBackend: AgentBackend, @unchecked Sendable {
 
     // MARK: Ambient context
 
-    public func pushSituationMessage(text: String, source: String, sessionId: String) {
-        locked {
-            situation.append(text)
-            if situation.count > Self.maxSituationEntries {
-                situation.removeFirst(situation.count - Self.maxSituationEntries)
-            }
-        }
-    }
+    /// Deliberately ignored on this path.
+    ///
+    /// The app-server backend needs ambient pushes because its Rust tools cannot
+    /// see the screen between turns. Here `list_windows` reads the *live* window
+    /// list on demand, so a buffered copy is both redundant and expensive
+    /// against a 4096-token window.
+    ///
+    /// It was worse than expensive: prepending the buffer to each turn as
+    /// "Recent screen activity: …\n\n<user text>" made a small model read the
+    /// whole thing as one query *about the screen*. Every message — "hi", "how
+    /// are you?" — came back as "I couldn't find any window displaying …".
+    /// Ambient context has to be something the model reaches for, not something
+    /// wrapped around what the user said.
+    public func pushSituationMessage(text: String, source: String, sessionId: String) {}
 
     // MARK: Goals
 
@@ -394,6 +385,13 @@ public final class FoundationModelsBackend: AgentBackend, @unchecked Sendable {
     /// nothing for the frontend to service.
     public var screenBridge: ScreenCaptureBridging? { nil }
 
+    public nonisolated var backendDescription: BackendDescription {
+        BackendDescription(
+            model: "Apple on-device model",
+            endpoint: "on-device (no backend process)"
+        )
+    }
+
     // MARK: Helpers
 
     private static func cap(_ s: String, _ limit: Int) -> String {
@@ -403,7 +401,7 @@ public final class FoundationModelsBackend: AgentBackend, @unchecked Sendable {
     /// `AgentResponse` is a UniFFI record shared with the app-server path. Token
     /// counts are zero: Apple exposes no tokenizer, and reporting a guess as a
     /// measurement would be worse than reporting nothing.
-    private static func response(_ content: String) -> AgentResponse {
+    private static func response(_ content: String, contextPercent: Float = 0) -> AgentResponse {
         AgentResponse(
             content: content,
             role: "assistant",
@@ -413,7 +411,7 @@ public final class FoundationModelsBackend: AgentBackend, @unchecked Sendable {
             inputTokens: 0,
             outputTokens: 0,
             totalTokens: 0,
-            contextPercent: 0,
+            contextPercent: contextPercent,
             suggestedNextCheckSeconds: nil
         )
     }
