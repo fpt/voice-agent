@@ -1,5 +1,6 @@
 import Foundation
 import AgentBridge
+import AgentKit
 
 /// `/goal` driver, modelled on Claude Code's `/goal`: set a completion condition
 /// and the agent keeps running turns on its own until an evaluator (a tool-less
@@ -10,7 +11,7 @@ import AgentBridge
 /// turn serialization via the gate. `runTurn` must not touch the gate.
 @MainActor
 final class GoalDriver {
-    private let agent: Agent
+    private let backend: AgentBackend
     private let gate: TurnGate
     private let maxTurns: Int
 
@@ -21,12 +22,12 @@ final class GoalDriver {
     private var task: Task<Void, Never>?
 
     init(
-        agent: Agent,
+        backend: AgentBackend,
         gate: TurnGate,
         maxTurns: Int,
         runTurn: @escaping @MainActor (String) async -> AgentResponse?
     ) {
-        self.agent = agent
+        self.backend = backend
         self.gate = gate
         self.maxTurns = max(1, maxTurns)
         self.runTurn = runTurn
@@ -37,7 +38,7 @@ final class GoalDriver {
     /// Set (or replace) the goal and start driving turns toward it.
     func set(_ condition: String) {
         stop(clearAgent: true)
-        agent.setGoal(condition: condition)
+        backend.setGoal(condition: condition)
         print("\u{25CE} goal set: \(condition)")
         print("\u{1B}[90m[goal] working toward it; /goal clear to stop, /goal for status\u{1B}[0m")
         task = Task { @MainActor in await self.drive(condition) }
@@ -45,7 +46,7 @@ final class GoalDriver {
 
     /// Clear the active goal (and stop the driver) before the condition is met.
     func clear() {
-        guard isActive || agent.goalStatus() != nil else {
+        guard isActive || backend.goalStatus() != nil else {
             print("[goal] no active goal.")
             return
         }
@@ -55,7 +56,7 @@ final class GoalDriver {
 
     /// Print the current goal status (Claude Code-style).
     func status() {
-        guard let s = agent.goalStatus() else {
+        guard let s = backend.goalStatus() else {
             print("[goal] no active goal. Set one with: /goal <condition>")
             return
         }
@@ -71,7 +72,7 @@ final class GoalDriver {
     private func stop(clearAgent: Bool) {
         task?.cancel()
         task = nil
-        if clearAgent { agent.clearGoal() }
+        if clearAgent { backend.clearGoal() }
     }
 
     private func drive(_ condition: String) async {
@@ -80,7 +81,7 @@ final class GoalDriver {
         while !Task.isCancelled {
             if turn >= maxTurns {
                 print("\n\u{25CE} goal stopped: reached the \(maxTurns)-turn cap without meeting the condition.\n")
-                agent.clearGoal()
+                backend.clearGoal()
                 break
             }
 
@@ -90,14 +91,14 @@ final class GoalDriver {
             _ = await runTurn(directive)
             // Evaluate off the MainActor (it's an LLM call) while holding the gate
             // so an ambient tick can't interleave between turn and evaluation.
-            let eval = await Task.detached { [agent] in try? agent.evaluateGoal() }.value
+            let eval = await Task.detached { [backend] in try? backend.evaluateGoal() }.value
             await gate.unlock()
             turn += 1
 
             if Task.isCancelled { break }
             guard let eval else {
                 print("\n\u{25CE} goal stopped: evaluation failed.\n")
-                agent.clearGoal()
+                backend.clearGoal()
                 break
             }
             if eval.met {
