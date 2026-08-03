@@ -15,12 +15,39 @@ import FoundationModels
 /// way: `item/tool/call` answers `success: false` with the detail, which the
 /// comment there calls "a normal ReAct outcome, not a transport error". This
 /// keeps the two paths consistent, and lets the model try something else.
-func toolResult(_ body: () async throws -> String) async -> String {
+func toolResult(_ body: () async throws -> String) async throws -> String {
     do {
         return try await body()
+    } catch is CancellationError {
+        // Cancellation is not a tool outcome. Reporting it as one would have the
+        // model reason about a turn that is being torn down.
+        throw CancellationError()
     } catch {
-        return "Tool failed: \(error.localizedDescription)"
+        // `errorDetail` rather than `localizedDescription`: the point of handing
+        // a failure to the model is so it can tell a permission problem it should
+        // stop retrying from a transient one worth another go, and a bridged
+        // error localizes to "The operation couldn't be completed" with the cause
+        // buried in `NSMultipleUnderlyingErrorsKey`.
+        return "Tool failed: \(errorDetail(error))"
     }
+}
+
+/// Pull the actionable cause out of a bridged error.
+///
+/// `localizedDescription` on a Foundation Models / Cocoa error is often just
+/// "The operation couldn't be completed", with what actually went wrong stored
+/// under `NSMultipleUnderlyingErrorsKey` or `NSUnderlyingErrorKey`.
+func errorDetail(_ error: Error) -> String {
+    let ns = error as NSError
+    var parts = [ns.localizedDescription]
+    let underlying = (ns.userInfo[NSMultipleUnderlyingErrorsKey] as? [Error] ?? [])
+        + (ns.userInfo[NSUnderlyingErrorKey].map { [$0 as? Error].compactMap { $0 } } ?? [])
+    for u in underlying {
+        let n = u as NSError
+        let described = n.localizedDescription
+        parts.append(described.isEmpty ? "\(n.domain) \(n.code)" : "\(n.domain) \(n.code): \(described)")
+    }
+    return parts.joined(separator: " / ")
 }
 
 /// Screen tools exposed to the model. Each calls ``ScreenTools`` directly —
@@ -38,7 +65,7 @@ struct ListWindowsTool: Tool {
     let tools: ScreenTools
 
     func call(arguments: Arguments) async throws -> String {
-        await toolResult { try await tools.listWindows() }
+        try await toolResult { try await tools.listWindows() }
     }
 }
 
@@ -56,7 +83,7 @@ struct FindWindowTool: Tool {
     let tools: ScreenTools
 
     func call(arguments: Arguments) async throws -> String {
-        await toolResult { try await tools.findWindow(keywords: arguments.keywords) }
+        try await toolResult { try await tools.findWindow(keywords: arguments.keywords) }
     }
 }
 
@@ -75,7 +102,7 @@ struct ReadWindowTool: Tool {
     let tools: ScreenTools
 
     func call(arguments: Arguments) async throws -> String {
-        await toolResult { try await tools.readWindow(titleOrProcess: arguments.window) }
+        try await toolResult { try await tools.readWindow(titleOrProcess: arguments.window) }
     }
 }
 
@@ -481,7 +508,7 @@ public final class FoundationModelsBackend: AgentBackend, @unchecked Sendable {
     private static func readable(_ error: Error) -> Error {
         guard let error = error as? LanguageModelSession.GenerationError else {
             return FoundationModelsFailure(
-                "The on-device model failed to complete the turn (\(detail(of: error))). "
+                "The on-device model failed to complete the turn (\(errorDetail(error))). "
                     + "This is often transient — try again, or /reset if it persists."
             )
         }
@@ -514,24 +541,6 @@ public final class FoundationModelsBackend: AgentBackend, @unchecked Sendable {
                     + "transient; try again."
             )
         }
-    }
-
-    /// `localizedDescription` on a bridged framework error is often just
-    /// "The operation couldn't be completed", with the actual cause buried in
-    /// `NSMultipleUnderlyingErrorsKey`. Dig it out so a failure is diagnosable.
-    private static func detail(of error: Error) -> String {
-        let ns = error as NSError
-        var parts = [ns.localizedDescription]
-        if let underlying = ns.userInfo[NSMultipleUnderlyingErrorsKey] as? [Error] {
-            parts.append(contentsOf: underlying.map { u in
-                let n = u as NSError
-                return "\(n.domain) \(n.code)"
-            })
-        }
-        if let single = ns.userInfo[NSUnderlyingErrorKey] as? NSError {
-            parts.append("\(single.domain) \(single.code)")
-        }
-        return parts.joined(separator: " / ")
     }
 
     private static func response(_ content: String, contextPercent: Float = 0) -> AgentResponse {

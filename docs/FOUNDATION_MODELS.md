@@ -236,6 +236,13 @@ The app-server backend does not behave that way: `item/tool/call` answers
 outcome, not a transport error". The Foundation Models tools now match, so a
 failing tool reports to the model and the turn continues.
 
+The *detail* is the point, not just the failure. A screen-recording denial and a
+transient glitch both localize to "The operation couldn't be completed", so the
+report to the model digs the cause out of `NSMultipleUnderlyingErrorsKey` — the
+model can then stop retrying a permission problem while retrying a flaky one.
+Cancellation is deliberately rethrown rather than reported: it is not a tool
+outcome, and the model should not reason about a turn being torn down.
+
 ### A real limit worth knowing
 
 With that noise removed, one genuine failure remains. Measured on this machine:
