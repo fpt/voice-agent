@@ -18,9 +18,9 @@ public protocol AgentBackend: AnyObject, Sendable {
 
     // MARK: Turns
 
-    /// Run one conversation turn and return the reply. Blocking: a turn can take
-    /// minutes, so callers run it off the main actor.
-    func step(_ text: String) throws -> AgentResponse
+    /// Run one conversation turn and return the reply. A turn can take minutes;
+    /// implementations keep blocking work off the cooperative thread pool.
+    func step(_ text: String) async throws -> AgentResponse
 
     /// Clear conversation history and start fresh.
     func reset()
@@ -48,7 +48,7 @@ public protocol AgentBackend: AnyObject, Sendable {
     func setGoal(condition: String)
     func clearGoal()
     func goalStatus() -> GoalStatus?
-    func evaluateGoal() throws -> GoalEvaluation
+    func evaluateGoal() async throws -> GoalEvaluation
 
     // MARK: Optional capabilities
 

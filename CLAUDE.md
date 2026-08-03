@@ -73,13 +73,14 @@ the split (voice-agent = platform + app-server client; the agent core lives in
 
 ## Configuration
 
-YAML configs in `configs/`. Two are shipped, one per backend flavor; the system
-prompt supports the `{language}` template variable.
+YAML configs in `configs/`. Three are shipped, one per backend flavour; the
+system prompt supports the `{language}` template variable.
 
 | config | backend | notes |
 |--------|---------|-------|
 | `gallium.yaml` | `gallium` (default) | local model via the standalone pure-Rust agent; `modelPath` + `inferenceEngine` forwarded as env |
 | `codex.yaml` | `codex` (cloud) | declares `backend: "codex"`; codex authenticates itself via `codex login` — no credentials are passed to it |
+| `foundation-models.yaml` | **none** (in-process) | Apple on-device model via `AgentKit.FoundationModelsBackend`. Spawns no process at all; needs macOS 26 + Apple silicon + Apple Intelligence, and falls back to `gallium` when unavailable. See **[docs/FOUNDATION_MODELS.md](docs/FOUNDATION_MODELS.md)**. |
 
 ```yaml
 backend: "gallium"                      # backend program on PATH; VOICE_AGENT_BACKEND overrides

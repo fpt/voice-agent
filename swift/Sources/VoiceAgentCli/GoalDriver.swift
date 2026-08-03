@@ -91,7 +91,7 @@ final class GoalDriver {
             _ = await runTurn(directive)
             // Evaluate off the MainActor (it's an LLM call) while holding the gate
             // so an ambient tick can't interleave between turn and evaluation.
-            let eval = await Task.detached { [backend] in try? backend.evaluateGoal() }.value
+            let eval = try? await backend.evaluateGoal()
             await gate.unlock()
             turn += 1
 

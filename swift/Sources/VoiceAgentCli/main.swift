@@ -427,7 +427,7 @@ func runOneShot(_ prompt: String) async {
         await turnGate.lock()
         let response: AgentResponse
         do {
-            response = try await Task.detached { try session.step(prompt) }.value
+            response = try await session.step(prompt)
         } catch {
             await turnGate.unlock()
             throw error
@@ -543,7 +543,7 @@ Editing: Left/Right move the cursor, Up/Down walk history (persisted to
             await turnGate.lock()
             let response: AgentResponse
             do {
-                response = try await Task.detached { try session.step(userInput) }.value
+                response = try await session.step(userInput)
             } catch {
                 await turnGate.unlock()
                 throw error
@@ -621,7 +621,7 @@ func runLoopTurn(_ prompt: String, muteMic: Bool) async -> AgentResponse? {
     }
     let response: AgentResponse
     do {
-        response = try await Task.detached { try session.step(prompt) }.value
+        response = try await session.step(prompt)
     } catch {
         logger.error("Loop turn error: \(error)")
         print("\u{1B}[90m[loop] turn failed: \(error)\u{1B}[0m")
@@ -768,7 +768,7 @@ func runContinuousVoiceMode() async {
         Task.detached {
             await turnGate.lock()
             do {
-                let response = try session.step(combined)
+                let response = try await session.step(combined)
                 await turnGate.unlock()
                 let text = response.content
                 await MainActor.run {
