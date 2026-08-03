@@ -7,6 +7,22 @@ import FoundationModels
 
 // MARK: - Tools
 
+/// Run a tool body, reporting failure to the *model* rather than throwing.
+///
+/// A throwing `Tool.call` aborts the whole turn — a denied screen-recording
+/// permission killed an entire conversation with "Failed to start stream due to
+/// audio/video capture failure". The app-server backend does not behave that
+/// way: `item/tool/call` answers `success: false` with the detail, which the
+/// comment there calls "a normal ReAct outcome, not a transport error". This
+/// keeps the two paths consistent, and lets the model try something else.
+func toolResult(_ body: () async throws -> String) async -> String {
+    do {
+        return try await body()
+    } catch {
+        return "Tool failed: \(error.localizedDescription)"
+    }
+}
+
 /// Screen tools exposed to the model. Each calls ``ScreenTools`` directly —
 /// there is no capture bridge and no poller on this path.
 
@@ -22,7 +38,7 @@ struct ListWindowsTool: Tool {
     let tools: ScreenTools
 
     func call(arguments: Arguments) async throws -> String {
-        try await tools.listWindows()
+        await toolResult { try await tools.listWindows() }
     }
 }
 
@@ -40,7 +56,7 @@ struct FindWindowTool: Tool {
     let tools: ScreenTools
 
     func call(arguments: Arguments) async throws -> String {
-        try await tools.findWindow(keywords: arguments.keywords)
+        await toolResult { try await tools.findWindow(keywords: arguments.keywords) }
     }
 }
 
@@ -59,7 +75,7 @@ struct ReadWindowTool: Tool {
     let tools: ScreenTools
 
     func call(arguments: Arguments) async throws -> String {
-        try await tools.readWindow(titleOrProcess: arguments.window)
+        await toolResult { try await tools.readWindow(titleOrProcess: arguments.window) }
     }
 }
 
@@ -97,10 +113,13 @@ struct GoalVerdict {
 }
 
 /// A Foundation Models failure phrased for a person.
-struct FoundationModelsFailure: LocalizedError {
+struct FoundationModelsFailure: LocalizedError, CustomStringConvertible {
     let message: String
     init(_ message: String) { self.message = message }
     var errorDescription: String? { message }
+    /// The CLI interpolates errors directly; without this the user sees the
+    /// synthesised struct description instead of the sentence.
+    var description: String { message }
 }
 
 // MARK: - Backend
@@ -155,7 +174,7 @@ public final class FoundationModelsBackend: AgentBackend, @unchecked Sendable {
     /// Ambient observations, readable by the model through
     /// `read_situation_messages` — the same contract the app-server backend
     /// offers, with the same TTL and cap.
-    private let situation = SituationStore()
+    private let situation: SituationStore
 
     /// Rebuilt whenever instructions change (a session's instructions are fixed
     /// at construction) and on `reset()`.
@@ -189,21 +208,30 @@ public final class FoundationModelsBackend: AgentBackend, @unchecked Sendable {
     }
 
     private init(screenTools: ScreenTools) {
+        // Built as locals so the session can be assigned once. Tools need both
+        // of these, and `self` is not available until every stored property is
+        // initialised — hence the static builder rather than an instance method.
+        let situation = SituationStore()
         self.screenTools = screenTools
-        // Placeholder first: `makeTools()` needs `self`, which is not available
-        // until every stored property is initialised.
-        self.session = LanguageModelSession(instructions: "")
-        self.session = LanguageModelSession(tools: makeTools(), instructions: "")
+        self.situation = situation
+        self.session = LanguageModelSession(
+            tools: Self.tools(screenTools: screenTools, situation: situation),
+            instructions: ""
+        )
         logger.info("on-device model ready")
     }
 
-    private func makeTools() -> [any Tool] {
+    private static func tools(screenTools: ScreenTools, situation: SituationStore) -> [any Tool] {
         [
             ListWindowsTool(tools: screenTools),
             FindWindowTool(tools: screenTools),
             ReadWindowTool(tools: screenTools),
             ReadSituationTool(store: situation),
         ]
+    }
+
+    private func makeTools() -> [any Tool] {
+        Self.tools(screenTools: screenTools, situation: situation)
     }
 
     // MARK: Instructions
@@ -245,7 +273,11 @@ public final class FoundationModelsBackend: AgentBackend, @unchecked Sendable {
         let reply: LanguageModelSession.Response<String>
         do {
             reply = try await session.respond(to: text)
-        } catch let error as LanguageModelSession.GenerationError {
+        } catch {
+            // Catch everything, not just `GenerationError`. A tool-call failure
+            // or a bridged NSError is not that type, and letting one through
+            // reaches the user as a raw
+            // "Error Domain=FoundationModels…Code=-1 (null)" dump.
             throw Self.readable(error)
         }
         logTranscript()
@@ -446,7 +478,13 @@ public final class FoundationModelsBackend: AgentBackend, @unchecked Sendable {
     /// "Error Domain=FoundationModels.LanguageModelSession.GenerationError
     /// Code=-1 …" — which tells the user nothing. Context overflow matters most:
     /// this model *throws* rather than truncating, and the remedy is `/reset`.
-    private static func readable(_ error: LanguageModelSession.GenerationError) -> Error {
+    private static func readable(_ error: Error) -> Error {
+        guard let error = error as? LanguageModelSession.GenerationError else {
+            return FoundationModelsFailure(
+                "The on-device model failed to complete the turn (\(detail(of: error))). "
+                    + "This is often transient — try again, or /reset if it persists."
+            )
+        }
         switch error {
         case .exceededContextWindowSize:
             return FoundationModelsFailure(
@@ -476,6 +514,24 @@ public final class FoundationModelsBackend: AgentBackend, @unchecked Sendable {
                     + "transient; try again."
             )
         }
+    }
+
+    /// `localizedDescription` on a bridged framework error is often just
+    /// "The operation couldn't be completed", with the actual cause buried in
+    /// `NSMultipleUnderlyingErrorsKey`. Dig it out so a failure is diagnosable.
+    private static func detail(of error: Error) -> String {
+        let ns = error as NSError
+        var parts = [ns.localizedDescription]
+        if let underlying = ns.userInfo[NSMultipleUnderlyingErrorsKey] as? [Error] {
+            parts.append(contentsOf: underlying.map { u in
+                let n = u as NSError
+                return "\(n.domain) \(n.code)"
+            })
+        }
+        if let single = ns.userInfo[NSUnderlyingErrorKey] as? NSError {
+            parts.append("\(single.domain) \(single.code)")
+        }
+        return parts.joined(separator: " / ")
     }
 
     private static func response(_ content: String, contextPercent: Float = 0) -> AgentResponse {

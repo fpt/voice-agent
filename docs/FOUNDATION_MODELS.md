@@ -215,14 +215,45 @@ the store:
   pagination are Claude-Code-specific and not worth the schema against a 4096
   token window.
 
-## Errors
+## Errors, and what they revealed
 
 Framework failures used to reach the user as raw `NSError` dumps
-("Error Domain=FoundationModels.LanguageModelSession.GenerationError Code=-1 …").
-`GenerationError` is now mapped to something actionable, most importantly
-`exceededContextWindowSize` → "use /reset", since this model throws rather than
-truncating. Transient token-generation failures are named as transient, because
-they are: the same prompt succeeds on a retry.
+("Error Domain=FoundationModels.LanguageModelSession.GenerationError Code=-1 …"),
+which say nothing. Turn failures are now mapped to a sentence, including the
+underlying error — `localizedDescription` on a bridged framework error is
+usually just "The operation couldn't be completed", with the cause buried in
+`NSMultipleUnderlyingErrorsKey`.
+
+Making them readable immediately corrected a wrong diagnosis. The first such
+failure was recorded here as "transient token generation"; with the underlying
+error surfaced it turned out to be `ReadWindowTool` failing with *"Failed to
+start stream due to audio/video capture failure"* — a screen-recording
+permission problem that **killed the entire turn**, because a throwing
+`Tool.call` aborts the response.
+
+The app-server backend does not behave that way: `item/tool/call` answers
+`success: false` with the detail, which its own comment calls "a normal ReAct
+outcome, not a transport error". The Foundation Models tools now match, so a
+failing tool reports to the model and the turn continues.
+
+### A real limit worth knowing
+
+With that noise removed, one genuine failure remains. Measured on this machine:
+
+| turn shape | outcome |
+|---|---|
+| plain chat | 4/4 succeeded |
+| single tool call | 4/4 succeeded |
+| open-ended, multi-tool chain | ~3/5 succeeded |
+
+The failures are `com.apple.tokengeneration 10`, from the framework rather than
+from our code, and they correlate with the length of the tool chain — each tool
+result is charged to the same 4096 tokens the response has to fit in. `/reset`
+and retry both clear it.
+
+So: short exchanges and single tool calls are reliable; long tool chains are not
+yet. Stage 3's context work (a skill lookup tool, transcript trimming, PCC
+escalation) is aimed squarely at this.
 
 ## Risks
 
