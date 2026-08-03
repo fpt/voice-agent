@@ -529,7 +529,7 @@ Editing: Left/Right move the cursor, Up/Down walk history (persisted to
                 }
                 continue
             }
-            handleCommand(userInput)
+            await handleCommand(userInput)
             continue
         }
 
@@ -569,7 +569,7 @@ Editing: Left/Right move the cursor, Up/Down walk history (persisted to
     }
 }
 
-func handleCommand(_ command: String) {
+func handleCommand(_ command: String) async {
     // /loop and /goal take arguments, so handle them by prefix before the switch.
     if command == "/loop" || command.hasPrefix("/loop ") {
         handleLoopCommand(String(command.dropFirst("/loop".count)).trimmingCharacters(in: .whitespaces))
@@ -590,10 +590,10 @@ func handleCommand(_ command: String) {
         printHelp()
     case "/history":
         print("Conversation History:")
-        print(session.conversationHistory())
+        print(await session.conversationHistory())
         print()
     case "/reset":
-        session.reset()
+        await session.reset()
         print("Conversation history cleared.\n")
     case "/voices":
         TextToSpeech.printAvailableVoices()
@@ -601,7 +601,7 @@ func handleCommand(_ command: String) {
         if session.tts.speaking { session.tts.stop(); print("TTS stopped.\n") }
         else { print("TTS is not currently speaking.\n") }
     default:
-        if !session.handleCommand(command) {
+        if !(await session.handleCommand(command)) {
             print("Unknown command: \(command)")
             print("Type /help for available commands.\n")
         }
@@ -616,7 +616,7 @@ func handleCommand(_ command: String) {
 @MainActor
 func runLoopTurn(_ prompt: String, muteMic: Bool) async -> AgentResponse? {
     if prompt.hasPrefix("/") {
-        handleCommand(prompt)
+        await handleCommand(prompt)
         return nil
     }
     let response: AgentResponse
@@ -856,13 +856,18 @@ Commands: /reset /quit /help /history /voices /stop /loop /goal
                         free(cStr)
                         _rlCompletedLine = nil
 
-                        await MainActor.run {
-                            let text = line.trimmingCharacters(in: .whitespacesAndNewlines)
+                        // Slash commands are handled outside the MainActor.run
+                        // block: `handleCommand` is async now (a `/reset` has to
+                        // wait for any in-flight turn before replacing the
+                        // session), and a synchronous closure cannot await.
+                        let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
+                        if trimmed.hasPrefix("/") {
+                            await handleCommand(trimmed)
+                            continue
+                        }
 
-                            if text.hasPrefix("/") {
-                                handleCommand(text)
-                                return
-                            }
+                        await MainActor.run {
+                            let text = trimmed
 
                             guard !text.isEmpty else { return }
 

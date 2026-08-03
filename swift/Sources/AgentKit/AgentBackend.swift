@@ -23,19 +23,24 @@ public protocol AgentBackend: AnyObject, Sendable {
     func step(_ text: String) async throws -> AgentResponse
 
     /// Clear conversation history and start fresh.
-    func reset()
+    ///
+    /// `async` because an implementation may have to wait for an in-flight turn:
+    /// replacing a live session out from under a running response is a race, not
+    /// a reset.
+    func reset() async
 
     /// The conversation so far, formatted for display.
-    func conversationHistory() -> String
+    func conversationHistory() async -> String
 
     // MARK: Configuration
 
-    /// Set the developer/system instructions carried into the agent.
-    func setSystemPrompt(_ prompt: String)
+    /// Set the developer/system instructions carried into the agent. `async` for
+    /// the same reason as ``reset()``.
+    func setSystemPrompt(_ prompt: String) async
 
     /// Register a skill. Whether its prompt is inlined or looked up on demand is
     /// the implementation's business.
-    func addSkill(name: String, description: String, prompt: String)
+    func addSkill(name: String, description: String, prompt: String) async
 
     // MARK: Ambient context
 

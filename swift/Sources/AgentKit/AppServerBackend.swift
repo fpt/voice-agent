@@ -28,21 +28,21 @@ public final class AppServerBackend: AgentBackend, ScreenCaptureBridging, @unche
         return try await Task.detached { try agent.step(userInput: text) }.value
     }
 
-    public func reset() {
+    public func reset() async {
         agent.reset()
     }
 
-    public func conversationHistory() -> String {
+    public func conversationHistory() async -> String {
         agent.getConversationHistory()
     }
 
     // MARK: Configuration
 
-    public func setSystemPrompt(_ prompt: String) {
+    public func setSystemPrompt(_ prompt: String) async {
         agent.setSystemPrompt(prompt: prompt)
     }
 
-    public func addSkill(name: String, description: String, prompt: String) {
+    public func addSkill(name: String, description: String, prompt: String) async {
         agent.addSkill(name: name, description: description, prompt: prompt)
     }
 
