@@ -282,6 +282,11 @@ pub struct Agent {
     /// (opened lazily on the first turn so a system prompt / skills set beforehand
     /// are carried in as developer instructions).
     thread_started: Mutex<bool>,
+    /// Set once the backend confirms it loaded our skills — by answering
+    /// `skills/extraRoots/set`, or by reporting a non-zero `skillCount` on
+    /// `thread/start`. Until then we inline the bodies, because a model that
+    /// cannot look a skill up needs its instructions in front of it.
+    backend_owns_skills: Mutex<bool>,
     /// `approvalPolicy` for the **main conversation thread**. `"untrusted"` when a
     /// [`MutationApprover`] was supplied (the backend then raises approval
     /// requests, which the approver answers); `"never"` when none was (the
@@ -402,6 +407,14 @@ pub fn agent_new(
     let user_agent = client
         .initialize("voice-agent")
         .map_err(|e| AgentError::ConfigError(format!("backend handshake failed: {e}")))?;
+
+    // Codex loads skills for the whole connection and renders bodies on demand,
+    // so ask before any thread exists — a success means we need not inline them.
+    // gallium answers method-not-found and takes paths per thread instead.
+    //
+    // After `initialize`, not before: codex rejects everything up to the
+    // handshake with "Not initialized".
+    let owns_skills = client.register_skill_roots(&config.skill_paths);
     // Name where the choice came from: picking the wrong backend is otherwise
     // invisible until the model answers, and looks like the config was ignored.
     tracing::info!(
@@ -426,6 +439,7 @@ pub fn agent_new(
         next_check,
         goal: Mutex::new(None),
         thread_started: Mutex::new(false),
+        backend_owns_skills: Mutex::new(owns_skills),
         mutation_policy,
     }))
 }
@@ -434,11 +448,21 @@ impl Agent {
     /// System prompt + skill catalog, combined into the backend thread's
     /// developer instructions.
     fn developer_instructions(&self) -> Option<String> {
+        self.developer_instructions_with_bodies(!self.backend_owns_skills())
+    }
+
+    /// Whether the backend has our skills in its own store, and can therefore
+    /// hand a body to the model itself.
+    fn backend_owns_skills(&self) -> bool {
+        self.config.skill_paths.is_empty() || *self.backend_owns_skills.lock()
+    }
+
+    fn developer_instructions_with_bodies(&self, include_bodies: bool) -> Option<String> {
         let mut parts: Vec<String> = Vec::new();
         if let Some(p) = self.system_prompt.lock().clone() {
             parts.push(p);
         }
-        if let Some(catalog) = self.skill_registry.catalog() {
+        if let Some(catalog) = self.skill_registry.catalog_with_bodies(include_bodies) {
             parts.push(catalog);
         }
         if parts.is_empty() {
@@ -468,18 +492,54 @@ impl Agent {
     /// Open the main conversation thread on the backend if it isn't open yet.
     fn ensure_thread(&self) -> Result<(), AgentError> {
         let mut started = self.thread_started.lock();
-        if !*started {
-            let instr = self.developer_instructions();
-            self.client.start_thread(
-                self.config.working_dir.as_deref(),
-                None,
-                instr.as_deref(),
-                Some(&self.mutation_policy),
-                self.mcp_config(),
-                &self.config.skill_paths,
-            )?;
-            *started = true;
+        if *started {
+            return Ok(());
         }
+
+        // Open optimistically without the skill bodies, then repair.
+        //
+        // `skillPaths` and the instructions travel in the same request, so
+        // whether the backend took them is only known from its answer. Assuming
+        // it did costs one extra `thread/start` when it did not; assuming it did
+        // not costs ~866 tokens on every thread, forever. Only the wrong guess
+        // is expensive, and only once.
+        // Optimistic only when there is something to be optimistic about: with
+        // no paths to hand over, no backend can resolve a name, so the bodies
+        // have to travel with the instructions.
+        let optimistic = !self.config.skill_paths.is_empty() && !*self.backend_owns_skills.lock();
+        let first_attempt = self.developer_instructions_with_bodies(!optimistic);
+
+        let (_, skill_count) = self.client.start_thread(
+            self.config.working_dir.as_deref(),
+            None,
+            first_attempt.as_deref(),
+            Some(&self.mutation_policy),
+            self.mcp_config(),
+            &self.config.skill_paths,
+        )?;
+
+        if optimistic {
+            if skill_count.unwrap_or(0) > 0 {
+                // It has them; every later thread can skip the bodies too.
+                *self.backend_owns_skills.lock() = true;
+            } else {
+                // It did not, and cannot resolve a name the catalog mentions.
+                // Put the instructions back in front of the model.
+                tracing::info!(
+                    "backend did not register our skills; inlining their instructions instead"
+                );
+                self.client.start_thread(
+                    self.config.working_dir.as_deref(),
+                    None,
+                    self.developer_instructions_with_bodies(true).as_deref(),
+                    Some(&self.mutation_policy),
+                    self.mcp_config(),
+                    &self.config.skill_paths,
+                )?;
+            }
+        }
+
+        *started = true;
         Ok(())
     }
 
@@ -637,7 +697,7 @@ impl Agent {
             .unwrap_or_default();
 
         // Goal eval is tool-less and read-only; no MCP servers needed.
-        let thread = self.client.open_thread(
+        let (thread, _) = self.client.open_thread(
             None,
             None,
             instructions.as_deref(),

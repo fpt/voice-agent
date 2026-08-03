@@ -161,8 +161,28 @@ holding sixteen tools and two skills.
 
 gallium answers `thread/start` with `skillCount`; a zero when paths were sent is
 logged as a warning, since a path that landed nowhere is otherwise invisible
-until a model says it has nothing. A backend that does not know the field
-ignores it and the inlined catalog still works.
+until a model says it has nothing.
+
+**Only the catalog is inlined when the backend confirms it holds the skills** —
+names and descriptions, not the bodies. Our two skills cost ~866 tokens inlined
+in full against ~101 for the catalog; measured against gallium, a turn dropped
+from 3797 to 2849 input tokens. The model reads a body through the backend's own
+lookup tool when it wants one.
+
+Confirmation comes two ways, both before the bodies would be needed:
+
+| backend | how it takes skills | when we learn |
+|---|---|---|
+| codex | `skills/extraRoots/set`, connection-wide, after `initialize` | immediately |
+| gallium | `skillPaths` on `thread/start` | from `skillCount` in the reply |
+
+gallium's answer arrives too late for that same request, so the thread opens
+optimistically with the catalog and is **re-opened with the bodies if the
+backend did not confirm**. Only the wrong guess costs anything, and only once —
+an older backend pays one extra `thread/start`, a current one pays nothing.
+
+The catalog itself is never dropped. That last ~101 tokens is what makes a skill
+discoverable, and a model that does not know a skill exists never looks it up.
 
 ## Build & Run
 
