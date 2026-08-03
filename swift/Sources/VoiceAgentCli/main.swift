@@ -450,8 +450,8 @@ func runTextMode() async {
   voice-agent - Text Mode
 ===========================================
 
-Model: \(config.llm.model ?? config.llm.modelPath ?? "(local)")
-Endpoint: \(config.llm.baseURL ?? "local (gallium backend)")
+Model: \(session.backend.backendDescription.model)
+Endpoint: \(session.backend.backendDescription.endpoint)
 
 Type your messages below. Commands:
   /reset    - Clear conversation history
@@ -821,8 +821,8 @@ func runContinuousVoiceMode() async {
   voice-agent - Continuous Voice Mode
 ===========================================
 
-Model: \(config.llm.model ?? config.llm.modelPath ?? "(local)")
-Endpoint: \(config.llm.baseURL ?? "local (gallium backend)")
+Model: \(session.backend.backendDescription.model)
+Endpoint: \(session.backend.backendDescription.endpoint)
 STT: Apple SpeechTranscriber (\(locale.identifier))
 
 Start speaking or type below. Press Ctrl+C to exit.

@@ -14,8 +14,21 @@ public final class AppServerBackend: AgentBackend, ScreenCaptureBridging, @unche
     /// exactly what this class exists to prevent.
     private let agent: Agent
 
-    public init(agent: Agent) {
+    /// The program Rust will have spawned, for the banner only.
+    private let program: String
+    private let model: String?
+
+    public init(agent: Agent, program: String, model: String?) {
         self.agent = agent
+        self.program = program
+        self.model = model
+    }
+
+    public var backendDescription: BackendDescription {
+        BackendDescription(
+            model: model ?? "(backend default)",
+            endpoint: "\(program) app-server"
+        )
     }
 
     // MARK: Turns
