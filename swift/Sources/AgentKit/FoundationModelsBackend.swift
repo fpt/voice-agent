@@ -299,6 +299,14 @@ public final class FoundationModelsBackend: AgentBackend {
             generating: GoalVerdict.self
         )
         goalLastReason = verdict.content.reason
+
+        // Clearing on success is part of the contract, not an optimisation:
+        // `GoalDriver` breaks its loop on `met` *without* clearing, on the
+        // stated assumption that the backend already did (the Rust path does
+        // `*g = None` there). Leaving it set makes `/goal` keep reporting an
+        // achieved goal as active.
+        if verdict.content.met { clearGoal() }
+
         return GoalEvaluation(met: verdict.content.met, reason: verdict.content.reason)
     }
 

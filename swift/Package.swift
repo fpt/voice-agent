@@ -61,6 +61,11 @@ let package = Package(
             pkgConfig: nil,
             providers: nil
         ),
+        .testTarget(
+            name: "AgentKitTests",
+            dependencies: ["AgentKit"],
+            swiftSettings: [.swiftLanguageMode(.v5)]
+        ),
         .target(
             name: "AgentBridge",
             dependencies: ["AgentBridgeFFI"],

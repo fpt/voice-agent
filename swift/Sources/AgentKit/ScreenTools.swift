@@ -30,11 +30,24 @@ public final class ScreenTools {
 
     public init() {}
 
-    /// Truncate to ``maxResultChars`` on a character boundary, saying so.
+    /// Truncate so the **returned** string is at most ``maxResultChars``,
+    /// truncation notice included.
+    ///
+    /// Reserving room for the notice up front matters: appending it after taking
+    /// a full-size prefix overshoots the cap on every truncation, which defeats
+    /// the point of having a hard budget.
     public static func cap(_ text: String) -> String {
         guard text.count > maxResultChars else { return text }
-        let kept = String(text.prefix(maxResultChars))
-        return "\(kept)\n… (truncated: \(kept.count)/\(text.count) chars — narrow the query)"
+
+        let notice = { (kept: Int) in
+            "\n… (truncated: \(kept)/\(text.count) chars — narrow the query)"
+        }
+        // The notice's own length depends on how much is kept, so budget for the
+        // worst case. `keep <= maxResultChars` makes `notice(keep)` no longer
+        // than the reserve, so the total cannot exceed the cap.
+        let reserve = notice(maxResultChars).count
+        let keep = max(0, maxResultChars - reserve)
+        return String(text.prefix(keep)) + notice(keep)
     }
 
     /// The user's real windows, system/incognito noise filtered out.
