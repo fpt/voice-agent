@@ -1,5 +1,8 @@
-import Foundation
 import AgentBridge
+import AgentCore
+import Foundation
+import FoundationModelsKit
+import ScreenCapture
 import Util
 import TTS
 
@@ -97,7 +100,7 @@ public class AgentSession: @unchecked Sendable {
             #if canImport(FoundationModels)
             if #available(macOS 26.0, *) {
                 self.backend = try await MainActor.run {
-                    try FoundationModelsBackend.make(screenTools: ScreenTools())
+                    try FoundationModelsBackend.make(perception: ScreenPerception())
                 }
                 logger.info("Backend: foundation-models (on-device, in-process)")
             } else {
@@ -230,7 +233,7 @@ public class AgentSession: @unchecked Sendable {
     // MARK: - Agent calls
 
     /// Run one conversation turn.
-    public func step(_ text: String) async throws -> AgentResponse {
+    public func step(_ text: String) async throws -> AgentCore.AgentResponse {
         try await backend.step(text)
     }
 

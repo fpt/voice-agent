@@ -1,6 +1,6 @@
 import XCTest
 
-@testable import AgentKit
+@testable import AgentCore
 
 /// `SituationStore` is the Swift twin of Rust's `SituationMessages`, and the two
 /// have to stay in step: the same observations must reach the model the same way

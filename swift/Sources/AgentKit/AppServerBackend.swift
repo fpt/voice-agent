@@ -1,4 +1,5 @@
 import AgentBridge
+import AgentCore
 import Foundation
 
 /// ``AgentBackend`` backed by a spawned app-server (`gallium`, `codex`, or any
@@ -36,9 +37,10 @@ public final class AppServerBackend: AgentBackend, ScreenCaptureBridging, @unche
     /// `agent.step` blocks for the whole turn (a UniFFI call into Rust, which
     /// waits on `turn/completed`). Run it on a detached task so it never occupies
     /// a cooperative thread.
-    public func step(_ text: String) async throws -> AgentResponse {
+    public func step(_ text: String) async throws -> AgentCore.AgentResponse {
         let agent = self.agent
-        return try await Task.detached { try agent.step(userInput: text) }.value
+        let generated = try await Task.detached { try agent.step(userInput: text) }.value
+        return Self.mapped(generated)
     }
 
     public func reset() async {
@@ -75,13 +77,21 @@ public final class AppServerBackend: AgentBackend, ScreenCaptureBridging, @unche
         agent.clearGoal()
     }
 
-    public func goalStatus() -> GoalStatus? {
-        agent.goalStatus()
+    public func goalStatus() -> AgentCore.GoalStatus? {
+        agent.goalStatus().map {
+            AgentCore.GoalStatus(
+                condition: $0.condition,
+                elapsedSeconds: $0.elapsedSeconds,
+                turnsEvaluated: $0.turnsEvaluated,
+                lastReason: $0.lastReason
+            )
+        }
     }
 
-    public func evaluateGoal() async throws -> GoalEvaluation {
+    public func evaluateGoal() async throws -> AgentCore.GoalEvaluation {
         let agent = self.agent
-        return try await Task.detached { try agent.evaluateGoal() }.value
+        let verdict = try await Task.detached { try agent.evaluateGoal() }.value
+        return AgentCore.GoalEvaluation(met: verdict.met, reason: verdict.reason)
     }
 
     // MARK: Optional capabilities
@@ -90,8 +100,40 @@ public final class AppServerBackend: AgentBackend, ScreenCaptureBridging, @unche
     /// APIs, so it does need the frontend to service capture requests.
     public var screenBridge: ScreenCaptureBridging? { self }
 
-    public func drainCaptureRequests() -> [CaptureRequest] {
-        agent.drainCaptureRequests()
+    /// Translate the UniFFI record into the domain type.
+    ///
+    /// This mapping is the whole point of the split: it is the only place the
+    /// generated types cross into the rest of the app, so everything above can
+    /// build without the Rust cdylib.
+    private static func mapped(_ r: AgentBridge.AgentResponse) -> AgentCore.AgentResponse {
+        AgentCore.AgentResponse(
+            content: r.content,
+            role: r.role,
+            isFinal: r.isFinal,
+            keywords: r.keywords,
+            reasoning: r.reasoning,
+            inputTokens: r.inputTokens,
+            outputTokens: r.outputTokens,
+            totalTokens: r.totalTokens,
+            contextPercent: r.contextPercent,
+            suggestedNextCheckSeconds: r.suggestedNextCheckSeconds
+        )
+    }
+
+    public func drainCaptureRequests() -> [AgentCore.CaptureRequest] {
+        agent.drainCaptureRequests().map {
+            AgentCore.CaptureRequest(
+                id: $0.id,
+                windowId: $0.windowId,
+                cropX: $0.cropX,
+                cropY: $0.cropY,
+                cropW: $0.cropW,
+                cropH: $0.cropH,
+                detect: $0.detect,
+                applyOcr: $0.applyOcr,
+                searchKeywords: $0.searchKeywords
+            )
+        }
     }
 
     public func submitCaptureResult(id: String, imageBase64: String, metadataJson: String) {

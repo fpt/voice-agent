@@ -1,6 +1,6 @@
 import XCTest
 
-@testable import AgentKit
+@testable import FoundationModelsKit
 
 #if canImport(FoundationModels)
 
