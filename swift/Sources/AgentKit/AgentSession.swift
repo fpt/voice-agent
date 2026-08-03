@@ -144,7 +144,7 @@ public class AgentSession: @unchecked Sendable {
                     }
                 }()
                 systemPrompt = systemPrompt.replacingOccurrences(of: "{language}", with: languagePrompt)
-                backend.setSystemPrompt(systemPrompt)
+                await backend.setSystemPrompt(systemPrompt)
                 logger.info("Loaded system prompt from \(resolvedPath)")
             } catch {
                 logger.warning("Failed to load system prompt: \(error)")
@@ -156,7 +156,7 @@ public class AgentSession: @unchecked Sendable {
         let skillPaths = config.agent.skillPaths ?? ["skills"]
         let discoveredSkills = SkillLoader.loadAll(paths: skillPaths, baseDir: configDir)
         for skill in discoveredSkills {
-            backend.addSkill(name: skill.name, description: skill.description, prompt: skill.prompt)
+            await backend.addSkill(name: skill.name, description: skill.description, prompt: skill.prompt)
         }
         logger.info("Skills registered (\(discoveredSkills.count) from \(skillPaths))")
     }
@@ -188,20 +188,20 @@ public class AgentSession: @unchecked Sendable {
     }
 
     /// Reset conversation history.
-    public func reset() {
-        backend.reset()
+    public func reset() async {
+        await backend.reset()
     }
 
     /// The conversation so far, formatted for display.
-    public func conversationHistory() -> String {
-        backend.conversationHistory()
+    public func conversationHistory() async -> String {
+        await backend.conversationHistory()
     }
 
     /// Process a slash command. Returns true if handled.
-    public func handleCommand(_ command: String) -> Bool {
+    public func handleCommand(_ command: String) async -> Bool {
         switch command {
         case "/reset":
-            backend.reset()
+            await backend.reset()
             return true
         case "/voices":
             TextToSpeech.printAvailableVoices()
