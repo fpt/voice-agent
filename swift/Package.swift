@@ -62,6 +62,21 @@ let package = Package(
             providers: nil
         ),
         .testTarget(
+            name: "UtilTests",
+            dependencies: ["Util"],
+            swiftSettings: [.swiftLanguageMode(.v5)]
+        ),
+        .testTarget(
+            name: "ScreenCaptureTests",
+            dependencies: ["ScreenCapture"],
+            swiftSettings: [.swiftLanguageMode(.v5)]
+        ),
+        .testTarget(
+            name: "VoiceAgentCliTests",
+            dependencies: ["VoiceAgentCli"],
+            swiftSettings: [.swiftLanguageMode(.v5)]
+        ),
+        .testTarget(
             name: "AgentKitTests",
             dependencies: ["AgentKit"],
             swiftSettings: [.swiftLanguageMode(.v5)]

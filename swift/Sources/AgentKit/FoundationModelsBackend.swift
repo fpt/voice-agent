@@ -90,14 +90,25 @@ struct GoalVerdict {
 /// output, with a hard error on overflow** — see docs/FOUNDATION_MODELS.md.
 /// Everything here is shaped by that: tool results are capped, skills are
 /// summarised rather than inlined, and every turn logs its transcript size.
-/// `@MainActor`-isolated: it holds mutable session/skill/situation state touched
-/// by both the frontend's window poller and turn execution, and its tools call
-/// `ScreenTools`, which is MainActor-bound anyway. Isolation rather than
-/// `@unchecked Sendable` means the compiler proves the absence of the data race
-/// instead of us asserting it.
+/// Its mutable state is reached from two directions — the frontend's window
+/// poller (MainActor) pushes situation while a turn may be executing on any
+/// executor — so every access goes through `lock`.
+///
+/// `@MainActor` isolation would be the nicer answer, but `AgentBackend` inherits
+/// `Sendable` and Swift will not form an actor-isolated conformance to a
+/// Sendable-inheriting protocol. So the synchronisation is explicit, and
+/// `@unchecked` is backed by the lock rather than by assertion.
 @available(macOS 26.0, *)
-@MainActor
-public final class FoundationModelsBackend: AgentBackend {
+public final class FoundationModelsBackend: AgentBackend, @unchecked Sendable {
+
+    /// Guards every stored property below.
+    private let lock = NSLock()
+
+    private func locked<T>(_ body: () -> T) -> T {
+        lock.lock()
+        defer { lock.unlock() }
+        return body()
+    }
 
     private let logger = Logger("FoundationModels")
     private let screenTools: ScreenTools
@@ -157,14 +168,14 @@ public final class FoundationModelsBackend: AgentBackend {
     /// prompt or skill catalog means a new session — and a new session has no
     /// transcript. Both happen once, during init. Nothing on the hot path may
     /// call this: see `turnInput(for:)` for why ambient context does not.
-    private func rebuildSession() {
+    private func rebuildSessionLocked() {
         session = LanguageModelSession(
             tools: FoundationModelsBackend.tools(screenTools),
-            instructions: buildInstructions()
+            instructions: buildInstructionsLocked()
         )
     }
 
-    private func buildInstructions() -> String {
+    private func buildInstructionsLocked() -> String {
         var parts: [String] = []
         if !systemPrompt.isEmpty { parts.append(systemPrompt) }
 
@@ -183,7 +194,10 @@ public final class FoundationModelsBackend: AgentBackend {
     // MARK: Turns
 
     public func step(_ text: String) async throws -> AgentResponse {
-        let reply = try await session.respond(to: turnInput(for: text))
+        // Snapshot under the lock, then await outside it — a turn runs for
+        // seconds and must not hold off the situation poller.
+        let (session, input) = locked { (self.session, self.consumeSituationLocked(text)) }
+        let reply = try await session.respond(to: input)
         logTranscript()
         return Self.response(reply.content)
     }
@@ -194,7 +208,7 @@ public final class FoundationModelsBackend: AgentBackend {
     /// into them meant rebuilding the session on every push — and the frontend
     /// pushes a window list every 30 seconds, which silently wiped the
     /// conversation mid-chat. Consumed once: it is context about *now*.
-    private func turnInput(for text: String) -> String {
+    private func consumeSituationLocked(_ text: String) -> String {
         guard !situation.isEmpty else { return text }
         let ambient = situation.joined(separator: "\n")
         situation.removeAll()
@@ -205,6 +219,7 @@ public final class FoundationModelsBackend: AgentBackend {
     /// Apple exposes no tokenizer — but the trend is what matters, and overflow
     /// is an error rather than a truncation, so it is worth watching.
     private func logTranscript() {
+        let session = locked { self.session }
         let chars = session.transcript.reduce(0) { total, entry in
             total + String(describing: entry).count
         }
@@ -219,12 +234,14 @@ public final class FoundationModelsBackend: AgentBackend {
     public func reset() {
         // A fresh session is the only way to clear a transcript, which is also
         // the only bound on context growth we have.
-        rebuildSession()
-        situation.removeAll()
+        locked {
+            situation.removeAll()
+            rebuildSessionLocked()
+        }
     }
 
     public func conversationHistory() -> String {
-        session.transcript
+        locked { self.session }.transcript
             .map { String(describing: $0) }
             .joined(separator: "\n")
     }
@@ -232,58 +249,75 @@ public final class FoundationModelsBackend: AgentBackend {
     // MARK: Configuration
 
     public func setSystemPrompt(_ prompt: String) {
-        systemPrompt = prompt
-        rebuildSession()
+        locked {
+            systemPrompt = prompt
+            rebuildSessionLocked()
+        }
     }
 
     public func addSkill(name: String, description: String, prompt: String) {
         // `prompt` is intentionally dropped: inlining full skill prompts does not
         // fit this model's window. Stage 3 gives the model a lookup tool so it
         // can fetch one on demand.
-        skills.append((name: name, description: description))
-        rebuildSession()
+        locked {
+            skills.append((name: name, description: description))
+            rebuildSessionLocked()
+        }
     }
 
     // MARK: Ambient context
 
     public func pushSituationMessage(text: String, source: String, sessionId: String) {
-        situation.append(text)
-        if situation.count > Self.maxSituationEntries {
-            situation.removeFirst(situation.count - Self.maxSituationEntries)
+        locked {
+            situation.append(text)
+            if situation.count > Self.maxSituationEntries {
+                situation.removeFirst(situation.count - Self.maxSituationEntries)
+            }
         }
     }
 
     // MARK: Goals
 
     public func setGoal(condition: String) {
-        goalCondition = condition
-        goalStartedAt = Date()
-        goalTurns = 0
-        goalLastReason = nil
+        locked {
+            goalCondition = condition
+            goalStartedAt = Date()
+            goalTurns = 0
+            goalLastReason = nil
+        }
     }
 
     public func clearGoal() {
-        goalCondition = nil
-        goalStartedAt = nil
-        goalTurns = 0
-        goalLastReason = nil
+        locked {
+            goalCondition = nil
+            goalStartedAt = nil
+            goalTurns = 0
+            goalLastReason = nil
+        }
     }
 
     public func goalStatus() -> GoalStatus? {
-        guard let condition = goalCondition, let started = goalStartedAt else { return nil }
+        let (condition, started, turns, reason) = locked {
+            (goalCondition, goalStartedAt, goalTurns, goalLastReason)
+        }
+        guard let condition, let started else { return nil }
         return GoalStatus(
             condition: condition,
             elapsedSeconds: UInt64(Date().timeIntervalSince(started)),
-            turnsEvaluated: goalTurns,
-            lastReason: goalLastReason
+            turnsEvaluated: turns,
+            lastReason: reason
         )
     }
 
     public func evaluateGoal() async throws -> GoalEvaluation {
-        guard let condition = goalCondition else {
+        let condition = locked { () -> String? in
+            guard let c = goalCondition else { return nil }
+            goalTurns += 1
+            return c
+        }
+        guard let condition else {
             return GoalEvaluation(met: false, reason: "No active goal.")
         }
-        goalTurns += 1
 
         // A separate, tool-less session: evaluation must not see the screen or
         // add to the working transcript.
@@ -298,7 +332,7 @@ public final class FoundationModelsBackend: AgentBackend {
             to: "Goal: \(condition)\n\nTranscript:\n\(transcript)\n\nHas the goal been met?",
             generating: GoalVerdict.self
         )
-        goalLastReason = verdict.content.reason
+        locked { goalLastReason = verdict.content.reason }
 
         // Clearing on success is part of the contract, not an optimisation:
         // `GoalDriver` breaks its loop on `met` *without* clearing, on the
