@@ -78,13 +78,14 @@ reply) and `listen` (speak → reply printed *and* spoken).
 
 ## Configuration
 
-YAML configs live in `configs/`; the same schema is read by every frontend. Two
-are shipped, one per backend flavor:
+YAML configs live in `configs/`; the same schema is read by every frontend.
+Three are shipped, one per backend flavour:
 
 | config | backend | notes |
 |--------|---------|-------|
 | `gallium.yaml` | `gallium` (default) | local model via the standalone pure-Rust agent |
 | `codex.yaml` | `codex` (cloud) | declares `backend: "codex"`; codex uses its own `codex login` credentials |
+| `foundation-models.yaml` | none — in-process | Apple's on-device model. No backend process; needs Apple Intelligence ([details](docs/FOUNDATION_MODELS.md)) |
 
 ```yaml
 backend: "gallium"                    # backend program on PATH: gallium | codex | "prog args"

@@ -69,12 +69,39 @@ public class AgentSession: @unchecked Sendable {
             workingDir: FileManager.default.currentDirectoryPath,
             reasoningEffort: config.llm.reasoningEffort,
             inferenceEngine: config.llm.inferenceEngine,
-            backend: config.backend,
+            // "foundation-models" names an in-process backend, not a program on
+            // PATH. Passing it through would make the Rust side try to spawn a
+            // binary by that name if we end up falling back, so it is cleared
+            // here and Rust applies its own default (gallium).
+            backend: Self.wantsFoundationModels(config.backend) ? nil : config.backend,
             mcpServers: mcpServers
         )
 
-        let agent = try agentNew(config: agentConfig, approver: approver)
-        self.backend = AppServerBackend(agent: agent)
+        // `backend: "foundation-models"` runs Apple's on-device model in-process
+        // instead of spawning an app-server. It is device-gated (Apple silicon +
+        // Apple Intelligence enabled), so a request for it that the machine
+        // cannot honour falls back rather than failing — see
+        // docs/FOUNDATION_MODELS.md.
+        var chosen: AgentBackend? = nil
+        if Self.wantsFoundationModels(config.backend) {
+            #if canImport(FoundationModels)
+            if #available(macOS 26.0, *) {
+                chosen = await MainActor.run { FoundationModelsBackend.make(screenTools: ScreenTools()) }
+            } else {
+                logger.warning("foundation-models needs macOS 26+; falling back to the app-server backend")
+            }
+            #else
+            logger.warning("this build has no FoundationModels; falling back to the app-server backend")
+            #endif
+            if chosen != nil { logger.info("Backend: foundation-models (on-device, in-process)") }
+        }
+
+        if let fm = chosen {
+            self.backend = fm
+        } else {
+            let agent = try agentNew(config: agentConfig, approver: approver)
+            self.backend = AppServerBackend(agent: agent)
+        }
         logger.info("Agent initialized")
 
         // TTS
@@ -136,6 +163,15 @@ public class AgentSession: @unchecked Sendable {
 
     // MARK: - Lifecycle
 
+    /// Whether the config asks for the in-process Foundation Models backend.
+    /// Everything else names a program to spawn and is resolved in Rust.
+    static func wantsFoundationModels(_ backend: String?) -> Bool {
+        guard let b = backend?.trimmingCharacters(in: .whitespaces).lowercased(), !b.isEmpty else {
+            return false
+        }
+        return b == "foundation-models" || b == "foundationmodels" || b == "apple"
+    }
+
     /// Start background event sources. Currently a no-op — the Claude Code
     /// watcher was removed; ambient context is fed via `pushSituationMessage`
     /// from the frontend's window-list poller.
@@ -147,8 +183,8 @@ public class AgentSession: @unchecked Sendable {
     // MARK: - Agent calls
 
     /// Run one conversation turn.
-    public func step(_ text: String) throws -> AgentResponse {
-        try backend.step(text)
+    public func step(_ text: String) async throws -> AgentResponse {
+        try await backend.step(text)
     }
 
     /// Reset conversation history.

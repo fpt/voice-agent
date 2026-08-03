@@ -20,8 +20,12 @@ public final class AppServerBackend: AgentBackend, ScreenCaptureBridging, @unche
 
     // MARK: Turns
 
-    public func step(_ text: String) throws -> AgentResponse {
-        try agent.step(userInput: text)
+    /// `agent.step` blocks for the whole turn (a UniFFI call into Rust, which
+    /// waits on `turn/completed`). Run it on a detached task so it never occupies
+    /// a cooperative thread.
+    public func step(_ text: String) async throws -> AgentResponse {
+        let agent = self.agent
+        return try await Task.detached { try agent.step(userInput: text) }.value
     }
 
     public func reset() {
@@ -62,8 +66,9 @@ public final class AppServerBackend: AgentBackend, ScreenCaptureBridging, @unche
         agent.goalStatus()
     }
 
-    public func evaluateGoal() throws -> GoalEvaluation {
-        try agent.evaluateGoal()
+    public func evaluateGoal() async throws -> GoalEvaluation {
+        let agent = self.agent
+        return try await Task.detached { try agent.evaluateGoal() }.value
     }
 
     // MARK: Optional capabilities

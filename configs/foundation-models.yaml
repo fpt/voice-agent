@@ -1,0 +1,44 @@
+# Apple Foundation Models — on-device, in-process
+#
+# Runs Apple's on-device model inside the Swift app. Unlike every other config,
+# this spawns **no backend process**: `LanguageModelSession` runs in-process and
+# the screen tools are Swift, so there is no JSON-RPC and no capture bridge.
+#
+#   voice-agent --config configs/foundation-models.yaml
+#
+# Requires macOS 26+ on Apple silicon with Apple Intelligence enabled. On a
+# machine that cannot run it, voice-agent logs a warning and falls back to the
+# `gallium` app-server rather than failing.
+#
+# **The window is 4096 tokens, shared between input and output, and overflow is
+# an error rather than a truncation.** That shapes this config: skills are
+# catalogued by description rather than inlined, tool results are capped at
+# 1500 characters, and only the last few ambient observations are kept. Expect
+# short exchanges to work well and long ones to need a `/reset`. See
+# docs/FOUNDATION_MODELS.md.
+
+backend: "foundation-models"
+
+llm:
+  # Deliberately empty. The model, endpoint, and credentials are Apple's — there
+  # is no process to forward environment to. `maxTokens` is not honoured either;
+  # the framework owns generation limits.
+  maxTokens: 4096
+
+agent:
+  systemPromptPath: "system-prompt.md"  # kept short on purpose — it is charged to the window
+  maxTurns: 50
+  language: "en"
+  skillPaths: ["../skills"]
+
+tts:
+  enabled: true
+  voice: "com.apple.voice.enhanced.en-US.Zoe"
+  rate: 0.5
+  pitchMultiplier: 1.0
+  volume: 1.0
+
+stt:
+  enabled: true
+  locale: "en-US"
+  censor: false

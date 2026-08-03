@@ -134,18 +134,60 @@ reason: String }` deletes it by construction.
 Verifiable by the existing end-to-end checks: both backends must still complete
 a real turn.
 
-### Stage 2 — `FoundationModelsBackend`
+### Stage 2 — `FoundationModelsBackend` ✅
 
-Behind an availability check, selected by config (`backend: "foundation-models"`),
-falling back to the app-server path when the device cannot run it. Swift `Tool`
-conformers for the screen tools. **Instrument context usage from the first
-turn** — that number decides whether stage 3 is worth doing.
+Done. `backend: "foundation-models"` (see `configs/foundation-models.yaml`)
+runs the on-device model in-process — **no backend process is spawned at all**.
+Availability is checked at startup and an unsupported machine falls back to the
+app-server path rather than failing.
 
-### Stage 3 — context discipline (only if stage 2 warrants it)
+Three Swift `Tool` conformers (`list_windows`, `find_window`, `read_window`)
+call `ScreenTools` directly. No capture bridge, no 100 ms poller.
 
-A skill *lookup* tool instead of inlining every prompt; restore a tool-output
-cap; Dynamic Profile transcript trimming; escalate oversized turns to Private
-Cloud Compute.
+**Measured context, which was the point of the stage:**
+
+| turn | ≈tokens | % of 4096 | entries |
+|---|---|---|---|
+| plain reply | 701 | 17% | 1 |
+| one tool call | 718 | 17% | 5 |
+| two tool calls | 799 | 19% | 7 |
+
+Comfortable, and the headroom comes from two decisions:
+
+- **Skills are catalogued, not inlined.** The app-server path inlines each
+  skill's full prompt (~992 tokens for two); a name-and-description line each
+  costs a fraction of that. `addSkill` deliberately drops the prompt body.
+- **Tool results are capped** at 1500 characters (`ScreenTools.maxResultChars`),
+  roughly 375 tokens. `read_window` is OCR and would otherwise return tens of
+  thousands of characters in a single call.
+
+Turn latency is ~2 s, against gallium's ~90 s model load plus ~15 s per turn.
+
+Two things worth knowing about the implementation:
+
+- A session's instructions are **fixed at construction**, so changing them means
+  a new session — and a new session has no transcript. Ambient situation
+  therefore rides along with the *turn input*, never the instructions. Folding
+  it into instructions silently wiped the conversation every 30 seconds, which
+  is how often the frontend pushes a window list.
+- The backend is `@MainActor`-isolated rather than `@unchecked Sendable`: it
+  holds mutable state touched by both the poller and turn execution, and its
+  tools are MainActor-bound regardless.
+
+### Stage 3 — context discipline
+
+Stage 2 shipped the two cheap wins already (skill catalog instead of inlining,
+tool-output cap). What is left, in the order the measurements suggest:
+
+- **A skill lookup tool.** Today `addSkill` drops the prompt body entirely, so a
+  skill is a name and a description and nothing more. The model should be able
+  to fetch the body on demand.
+- **Transcript trimming** via Dynamic Profiles, for long conversations. Today
+  the only bound is `/reset`.
+- **Private Cloud Compute escalation** (32K) for a turn that will not fit.
+- **A real token count.** Everything above is `chars / 4`; Apple exposes no
+  tokenizer. Newer SDKs are reported to add `tokenCount(for:)` — worth adopting
+  when available, since overflow throws rather than truncates.
 
 ## Risks
 
