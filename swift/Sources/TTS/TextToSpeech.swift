@@ -84,6 +84,37 @@ public class TextToSpeech: NSObject, @unchecked Sendable {
         // A dangling/unterminated <think> with no closing tag → drop to end.
         s = s.replacingOccurrences(
             of: "(?is)<think>.*", with: " ", options: .regularExpression)
+
+        // Machine-readable payloads. A model asked for a screenshot once replied
+        // with a base64 data URI, and this spoke it — character by character. The
+        // printed reply keeps everything; only speech is reduced.
+
+        // Markdown image: keep the alt text, drop the payload.
+        s = s.replacingOccurrences(
+            of: "!\\[([^\\]]*)\\]\\([^)]*\\)", with: "$1 image", options: .regularExpression)
+        // Markdown link: say the label, not the URL.
+        s = s.replacingOccurrences(
+            of: "\\[([^\\]]+)\\]\\([^)]*\\)", with: "$1", options: .regularExpression)
+        // Fenced code.
+        s = s.replacingOccurrences(
+            of: "(?s)```.*?```", with: " code block ", options: .regularExpression)
+        s = s.replacingOccurrences(
+            of: "(?s)```.*", with: " code block ", options: .regularExpression)
+        // data: URIs, whatever they carry.
+        s = s.replacingOccurrences(
+            of: "data:[^;,\\s]*;?[^,\\s]*,[A-Za-z0-9+/=]+", with: " image data ",
+            options: .regularExpression)
+        // Bare URLs read aloud are unbearable.
+        s = s.replacingOccurrences(
+            of: "https?://\\S+", with: " a link ", options: .regularExpression)
+        // Any remaining unbroken 40+ character run with no vowel-ish structure —
+        // hashes, tokens, leftover base64.
+        s = s.replacingOccurrences(
+            of: "[A-Za-z0-9+/=_-]{40,}", with: " a long code ", options: .regularExpression)
+
+        // Collapse the whitespace those substitutions leave behind.
+        s = s.replacingOccurrences(of: "[ \\t]{2,}", with: " ", options: .regularExpression)
+        s = s.replacingOccurrences(of: "\n{3,}", with: "\n\n", options: .regularExpression)
         return s.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 

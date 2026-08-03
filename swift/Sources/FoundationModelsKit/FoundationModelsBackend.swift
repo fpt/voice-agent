@@ -255,6 +255,29 @@ public final class FoundationModelsBackend: AgentBackend, @unchecked Sendable {
         return "Cannot start the foundation-models backend: \(cause). " + requirementHint
     }
 
+    /// Told to the model on every session, because it does not otherwise know
+    /// what it cannot do.
+    ///
+    /// Asked to "take a screenshot" it once answered with markdown image syntax
+    /// and an invented base64 data URI — a 16x16 blank PNG — which the voice path
+    /// then read out loud. It has no image channel at all: `Transcript.Segment`
+    /// in the macOS 26 SDK carries text or structured content, nothing else.
+    /// (Image attachments arrive in the 27 SDKs as `Transcript.Attachment.image`,
+    /// at which point a real capture tool becomes possible and this should be
+    /// revisited.)
+    ///
+    /// So it is told plainly, and pointed at what does work: the perception
+    /// tools, which return text.
+    static let capabilityNote = """
+        You cannot produce images. If asked for a screenshot or a picture, say \
+        plainly that you cannot, and offer to describe what is on screen instead \
+        — do not call tools for it. Never output image markup, data: URIs, or \
+        base64; inventing one is worse than saying you cannot.
+
+        Replies are spoken aloud: keep them to a few plain sentences. No code, \
+        no URLs, no long lists.
+        """
+
     static let requirementHint =
         "It requires macOS 26 on Apple silicon with Apple Intelligence enabled. "
         + "To use a different backend, set `backend:` in the config "
@@ -316,6 +339,7 @@ public final class FoundationModelsBackend: AgentBackend, @unchecked Sendable {
             parts.append("Available skills:\n\(lines)")
         }
 
+        parts.append(Self.capabilityNote)
         return parts.joined(separator: "\n\n")
     }
 

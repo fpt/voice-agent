@@ -215,6 +215,25 @@ the store:
   pagination are Claude-Code-specific and not worth the schema against a 4096
   token window.
 
+## No image channel (until 27)
+
+The framework is **text-only in the macOS 26 SDK**: `Transcript.Segment` is
+`.text` or `.structure`, and "image" does not appear in the module interface at
+all. Image attachments arrive in the 27 SDKs as `Transcript.Attachment.image`,
+which accepts `NSImage`/`CGImage`/pixel buffers and file URLs — at which point a
+real capture tool becomes possible and the note below should be revisited.
+
+Until then the model has to be *told*, because it does not know. Asked to "take
+a screenshot" it answered with markdown image syntax and an invented base64 data
+URI — a 16×16 blank PNG — which the voice path then read out character by
+character. It is now told it cannot produce images, and told to decline rather
+than go tool-hunting for one; the phrasing matters, because an earlier version
+that said "then use your tools to describe it" sent the model off on a tool
+chain that sometimes overran the context window.
+
+The whole note costs ~50 tokens, which is worth it here but is charged to the
+same 4096.
+
 ## Errors, and what they revealed
 
 Framework failures used to reach the user as raw `NSError` dumps
