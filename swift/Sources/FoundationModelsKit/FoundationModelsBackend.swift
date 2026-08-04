@@ -242,7 +242,7 @@ public final class FoundationModelsBackend: AgentBackend, @unchecked Sendable {
     private var systemPrompt: String = ""
     /// Names and descriptions go into the instructions; bodies stay here and
     /// reach the model through `lookup_skill`.
-    private let skills = SkillStore()
+    private let skills: SkillStore
 
     private var goalCondition: String?
     private var goalStartedAt: Date?
@@ -294,12 +294,14 @@ public final class FoundationModelsBackend: AgentBackend, @unchecked Sendable {
         + "(e.g. \"gallium\" or \"codex\") or export VOICE_AGENT_BACKEND."
 
     private init(perception: any EnvironmentPerception) {
-        // Built as locals so the session can be assigned once. Tools need both
-        // of these, and `self` is not available until every stored property is
-        // initialised — hence the static builder rather than an instance method.
+        // Built as locals so the session can be assigned once, and so nothing
+        // here reads back through `self` while the object is still being built.
+        // The tools need all three; the builder is static for the same reason.
         let situation = SituationStore()
+        let skills = SkillStore()
         self.perception = perception
         self.situation = situation
+        self.skills = skills
         self.session = LanguageModelSession(
             tools: Self.tools(perception: perception, situation: situation, skills: skills),
             instructions: ""
