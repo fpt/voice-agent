@@ -209,7 +209,21 @@ void ProcessMessage(string text, bool speak)
         if (!string.IsNullOrEmpty(resp.reasoning))
             Console.WriteLine($"[90m💭 {resp.reasoning}[0m\n");
         Console.WriteLine($"Assistant: {resp.content}");
-        Console.WriteLine($"[90m[{(int)resp.contextPercent}% context][0m\n");
+        // Only when the backend measured one. A zero means it reported no usage,
+        // or no context window it could vouch for — printing "[0% context]"
+        // there is a confident claim that the context is empty. A real share
+        // under one percent says so, rather than truncating into that same zero.
+        if (resp.contextPercent > 0)
+        {
+            var shown = resp.contextPercent < 1
+                ? "<1"
+                // Away from zero, because .NET rounds midpoints to even by
+                // default and Swift's `rounded()` does not — 2.5% would read as
+                // 2% here and 3% on macOS, off the same number.
+                : ((int)Math.Round(resp.contextPercent, MidpointRounding.AwayFromZero))
+                    .ToString();
+            Console.WriteLine($"[90m[{shown}% context][0m\n");
+        }
         if (speak)
         {
             voice ??= new VoiceOutput(speechCulture);

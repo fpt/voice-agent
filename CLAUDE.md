@@ -260,6 +260,7 @@ codex-app-server protocol.
 | `item/tool/call` | **in** | backend invokes one of voice-agent's client tools |
 | `item/{commandExecution,fileChange}/requestApproval` | **in** | backend asks voice-agent to permit a mutation |
 | `item/completed` | **in** | an `agentMessage` (or other item); a turn may emit several |
+| `thread/tokenUsage/updated` | **in** | what the turn is costing, one per model call — the context gauge |
 | `turn/completed` | **in** | the turn ended (`completed` \| `interrupted` \| …) — what a caller waits on |
 | `turn/failed` | **in** | gallium only; codex folds failures into `turn/completed` |
 
@@ -283,7 +284,34 @@ Key points:
 
 - **The transport is bidirectional** (`rpc.rs`): inbound requests are dispatched on their own threads so a `turn/start` in flight can be answered by client-tool calls the backend originates. `Connection::request` also allows **concurrent outbound requests** — the writer lock is held only across the write — which is what will make `turn/steer` possible without transport changes.
 - `config.mcp_servers` is forwarded to the backend via `thread/start`'s `config.mcp_servers`; the backend connects them.
-- Known degradation vs. the old in-process agent: `step` returns text only (no keyword hints / token counts). The backend owns its tool set, so there is no per-turn tool filtering from this side.
+- Known degradation vs. the old in-process agent: `step` returns no keyword hints. The backend owns its tool set, so there is no per-turn tool filtering from this side.
+
+### The context gauge
+
+`thread/tokenUsage/updated` arrives **once per model call**, so a tool-using turn
+reports several. `TurnUsage` folds them the way each number means:
+
+| | how it accumulates | why |
+|---|---|---|
+| `input/output/total_tokens` | summed over the turn's calls | what the turn cost |
+| `context_tokens` | the **last** call only | every call's prompt already holds the whole conversation, so summing would report a context several times fuller than it is (codex reads its own field the same way: `tokens_in_context_window` is `last.totalTokens`) |
+| `context_window` | `modelContextWindow`, dropped unless `> 0` | see below |
+
+**No window, no gauge.** gallium sends `modelContextWindow: null` when nobody
+vouched for a window — it still compacts against a fallback, but a percentage of
+a guess reads as a measurement. `context_percent()` answers `None` for that, for
+a zero window, and for a turn that reported no usage at all; `make_response`
+turns `None` into `0.0`, which is the frontends' signal to print nothing.
+
+That last case is what a backend without this support looks like, and it is
+where the whole app-server path sat: `make_response` hardcoded zero and every
+turn printed a confident `[0% context]` while gallium logged thousands of tokens
+for that same turn (#18 removed the gauge for exactly that reason). Nothing
+needs to detect the backend's age — an older one simply sends no usage and gets
+no gauge.
+
+Verified live against gallium: `input=2854, output=5` in its log, `[2% context]`
+in the REPL, against the 131,072 window its GGUF reports for gemma-4-E4B.
 
 ## Project Structure
 

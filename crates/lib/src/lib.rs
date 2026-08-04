@@ -543,17 +543,31 @@ impl Agent {
         Ok(())
     }
 
-    fn make_response(&self, content: String, suggested: Option<u32>) -> AgentResponse {
+    /// Build the response for a finished turn.
+    ///
+    /// `context_percent` is `0` when the backend reported no window — the
+    /// frontends read a zero as "no gauge" and print nothing, which is the
+    /// contract gallium sets on the wire by sending `modelContextWindow: null`
+    /// rather than a figure nobody vouched for. A backend that sends no usage at
+    /// all (an older gallium, or codex before its usage notification) lands in
+    /// the same place, which is where this whole path sat before: it used to
+    /// hardcode a zero and print a confident "[0% context]".
+    fn make_response(
+        &self,
+        content: String,
+        usage: app_server_client::TurnUsage,
+        suggested: Option<u32>,
+    ) -> AgentResponse {
         AgentResponse {
             content,
             role: "assistant".to_string(),
             is_final: true,
             keywords: None,
             reasoning: None,
-            input_tokens: 0,
-            output_tokens: 0,
-            total_tokens: 0,
-            context_percent: 0.0,
+            input_tokens: usage.input_tokens,
+            output_tokens: usage.output_tokens,
+            total_tokens: usage.total_tokens,
+            context_percent: usage.context_percent().unwrap_or(0.0),
             suggested_next_check_seconds: suggested,
         }
     }
@@ -575,9 +589,9 @@ impl Agent {
 
         let mut memory = self.memory.lock();
         memory.add_message(ChatMessage::user(user_input));
-        memory.add_message(ChatMessage::assistant(reply.clone()));
+        memory.add_message(ChatMessage::assistant(reply.text.clone()));
 
-        Ok(self.make_response(reply, self.suggested_next_check()))
+        Ok(self.make_response(reply.text, reply.usage, self.suggested_next_check()))
     }
 
     /// Reset the conversation: clear the local mirror and open a fresh backend
@@ -706,7 +720,7 @@ impl Agent {
             &self.config.skill_paths,
         )?;
         let raw = self.client.run_turn_on(&thread, &prompt)?;
-        let (met, reason) = goal::parse_evaluation(&raw);
+        let (met, reason) = goal::parse_evaluation(&raw.text);
 
         {
             let mut g = self.goal.lock();

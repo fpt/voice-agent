@@ -123,6 +123,68 @@ enum TurnOutcome {
     Failed { message: String },
 }
 
+/// What one turn cost, assembled from the backend's `thread/tokenUsage/updated`
+/// notifications.
+///
+/// The backend sends one per **model call**, so a tool-using turn reports
+/// several. The three totals accumulate across them — that is what the turn
+/// spent — while `context_tokens` keeps only the latest, because each call's
+/// prompt already contains the whole conversation and the last one is therefore
+/// how full the window is now. That is codex's own reading of the field: its
+/// `tokens_in_context_window` is `last.totalTokens`.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct TurnUsage {
+    pub input_tokens: u64,
+    pub output_tokens: u64,
+    pub total_tokens: u64,
+    /// Tokens the most recent model call carried — what a context gauge measures.
+    pub context_tokens: u64,
+    /// The model's window, and **only when the backend vouched for one**.
+    /// `None` means no gauge: gallium sends `modelContextWindow: null` rather
+    /// than a built-in guess, and a percentage of a guess reads as a
+    /// measurement. Never `Some(0)` — a zero denominator is not a window.
+    pub context_window: Option<u64>,
+}
+
+impl TurnUsage {
+    /// Share of the context window in use, 0-100, or `None` when nothing can be
+    /// said: no window reported, or no usage measured at all.
+    pub fn context_percent(&self) -> Option<f32> {
+        let window = self.context_window.filter(|w| *w > 0)?;
+        if self.context_tokens == 0 {
+            return None;
+        }
+        Some((self.context_tokens as f64 / window as f64 * 100.0) as f32)
+    }
+
+    /// Fold in one `thread/tokenUsage/updated` payload.
+    fn absorb(&mut self, usage: &Value) {
+        let field = |breakdown: Option<&Value>, name: &str| -> u64 {
+            breakdown
+                .and_then(|b| b.get(name))
+                .and_then(Value::as_u64)
+                .unwrap_or(0)
+        };
+        let last = usage.get("last");
+        self.input_tokens += field(last, "inputTokens");
+        self.output_tokens += field(last, "outputTokens");
+        self.total_tokens += field(last, "totalTokens");
+        self.context_tokens = field(last, "totalTokens");
+        // Absent or null both mean "no window"; a reported zero is not one either.
+        self.context_window = usage
+            .get("modelContextWindow")
+            .and_then(Value::as_u64)
+            .filter(|w| *w > 0);
+    }
+}
+
+/// A finished turn: what the agent said, and what it cost.
+#[derive(Clone, Debug, Default)]
+pub struct TurnReply {
+    pub text: String,
+    pub usage: TurnUsage,
+}
+
 /// What we know about one turn. Created on demand: the backend's notifications
 /// for a turn can arrive **before** the `turn/start` response that names it, so
 /// the reader cannot assume the waiter registered the turn first.
@@ -131,6 +193,8 @@ struct TurnSlot {
     /// `agentMessage` texts in arrival order. A turn emits more than one once it
     /// can be steered, so these accumulate rather than overwrite.
     messages: Vec<String>,
+    /// Running cost, updated as `thread/tokenUsage/updated` arrives.
+    usage: TurnUsage,
     /// `None` while the turn is still running.
     outcome: Option<TurnOutcome>,
 }
@@ -159,6 +223,18 @@ impl Shared {
             .or_default()
             .messages
             .push(text.to_string());
+        self.turn_signal.notify_all();
+    }
+
+    /// Record a `thread/tokenUsage/updated` against `turn_id`, creating the slot
+    /// on demand for the same reason `push_message` does.
+    fn push_usage(&self, turn_id: &str, usage: &Value) {
+        self.turns
+            .lock()
+            .entry(turn_id.to_string())
+            .or_default()
+            .usage
+            .absorb(usage);
         self.turn_signal.notify_all();
     }
 
@@ -268,6 +344,17 @@ impl RequestHandler for ClientHandler {
                     item.and_then(|i| i.get("text")).and_then(Value::as_str),
                 ) {
                     self.shared.push_message(turn, text);
+                }
+            }
+            // What the turn is costing, one notification per model call, so a
+            // long tool-using turn reports several. Both backends send codex's
+            // shape; a backend that sends none simply leaves the usage zero,
+            // which reads as "no gauge" rather than as an empty context.
+            "thread/tokenUsage/updated" => {
+                if let (Some(turn), Some(usage)) =
+                    (turn_id_of(&params), params.get("tokenUsage"))
+                {
+                    self.shared.push_usage(turn, usage);
                 }
             }
             // The turn is over. This — not the `turn/start` response — is what a
@@ -565,10 +652,10 @@ impl AppServerClient {
         Ok((thread_id, skill_count))
     }
 
-    /// Run one turn on an explicit thread and return the agent's final text.
-    /// Blocks until the turn completes (the backend may call our tools
-    /// reentrantly meanwhile).
-    pub fn run_turn_on(&self, thread_id: &str, text: &str) -> Result<String, AgentError> {
+    /// Run one turn on an explicit thread and return the agent's final text plus
+    /// what the turn cost. Blocks until the turn completes (the backend may call
+    /// our tools reentrantly meanwhile).
+    pub fn run_turn_on(&self, thread_id: &str, text: &str) -> Result<TurnReply, AgentError> {
         let resp = self.conn.request(
             "turn/start",
             json!({
@@ -592,9 +679,10 @@ impl AppServerClient {
     }
 
     /// Block until `turn_id` reports `turn/completed` / `turn/failed`, then take
-    /// its text. Notifications for the turn may already have arrived before this
-    /// is called — the slot is created on demand, so nothing is lost either way.
-    fn await_turn(&self, turn_id: &str) -> Result<String, AgentError> {
+    /// its text and usage. Notifications for the turn may already have arrived
+    /// before this is called — the slot is created on demand, so nothing is lost
+    /// either way.
+    fn await_turn(&self, turn_id: &str) -> Result<TurnReply, AgentError> {
         let mut turns = self.shared.turns.lock();
         loop {
             // Created on demand: the reader may not have seen this turn at all yet.
@@ -607,7 +695,10 @@ impl AppServerClient {
                     )),
                     // `interrupted` is a normal ending, not an error: the caller
                     // keeps whatever the turn produced before it was stopped.
-                    _ => Ok(slot.messages.join("\n")),
+                    _ => Ok(TurnReply {
+                        text: slot.messages.join("\n"),
+                        usage: slot.usage,
+                    }),
                 };
             }
 
@@ -629,7 +720,7 @@ impl AppServerClient {
     }
 
     /// Run one turn on the client's main conversation thread.
-    pub fn run_turn(&self, text: &str) -> Result<String, AgentError> {
+    pub fn run_turn(&self, text: &str) -> Result<TurnReply, AgentError> {
         let thread_id = self
             .thread_id
             .lock()
@@ -829,7 +920,7 @@ mod tests {
                 .start_thread(None, None, None, Some("never"), None, &[])
                 .expect("thread/start");
             let reply = client.run_turn("hi").expect("run_turn");
-            let _ = done_tx.send((reply, called.load(Ordering::SeqCst)));
+            let _ = done_tx.send((reply.text, called.load(Ordering::SeqCst)));
         });
 
         let (reply, tool_called) = done_rx
@@ -936,7 +1027,7 @@ mod tests {
                 .expect("thread/start");
             client.run_turn("hi").expect("run_turn")
         });
-        assert_eq!(reply, "part0");
+        assert_eq!(reply.text, "part0");
     }
 
     /// A turn can emit several agentMessages — a steered turn always will. They
@@ -954,7 +1045,7 @@ mod tests {
                 .expect("thread/start");
             client.run_turn("hi").expect("run_turn")
         });
-        assert_eq!(reply, "part0\npart1\npart2");
+        assert_eq!(reply.text, "part0\npart1\npart2");
     }
 
     /// gallium reports a failure as `turn/failed`; codex folds it into
@@ -991,7 +1082,149 @@ mod tests {
                 .expect("thread/start");
             client.run_turn("hi").expect("interrupted is not an error")
         });
-        assert_eq!(reply, "part0");
+        assert_eq!(reply.text, "part0");
+    }
+
+    // --- token usage / the context gauge -------------------------------------
+
+    /// Reports usage the way both backends do: one `thread/tokenUsage/updated`
+    /// per **model call**, with `last` carrying that call and `total` the
+    /// thread's running sum. Two calls, because the interesting case is a turn
+    /// that used a tool — the prompt grows between them.
+    struct UsageBackend {
+        /// What to put in `modelContextWindow`. `None` sends an explicit null,
+        /// which is how gallium says "nobody vouched for a window".
+        window: Option<u64>,
+    }
+
+    impl RequestHandler for UsageBackend {
+        fn handle_request(
+            &self,
+            conn: &Arc<Connection>,
+            method: &str,
+            _params: Value,
+        ) -> HandlerResult {
+            match method {
+                "initialize" => Ok(json!({ "userAgent": "voice-agent-test/0.1.0" })),
+                "thread/start" => Ok(json!({ "threadId": "t1" })),
+                "turn/start" => {
+                    let conn = Arc::clone(conn);
+                    let window = self.window;
+                    std::thread::spawn(move || {
+                        let call = |input: u64, output: u64| {
+                            json!({
+                                "totalTokens": input + output,
+                                "inputTokens": input,
+                                "cachedInputTokens": 0,
+                                "cacheWriteInputTokens": 0,
+                                "outputTokens": output,
+                                "reasoningOutputTokens": 0,
+                            })
+                        };
+                        for (input, output) in [(1000_u64, 20_u64), (1500, 40)] {
+                            conn.notify(
+                                "thread/tokenUsage/updated",
+                                json!({
+                                    "threadId": "t1",
+                                    "turnId": "turn1",
+                                    "tokenUsage": {
+                                        "total": call(2500, 60),
+                                        "last": call(input, output),
+                                        "modelContextWindow": window,
+                                    },
+                                }),
+                            );
+                        }
+                        conn.notify(
+                            "item/completed",
+                            json!({
+                                "turnId": "turn1",
+                                "item": { "type": "agentMessage", "text": "done" },
+                            }),
+                        );
+                        conn.notify(
+                            "turn/completed",
+                            json!({
+                                "threadId": "t1",
+                                "turn": { "id": "turn1", "status": "completed" },
+                            }),
+                        );
+                    });
+                    Ok(json!({ "turn": { "id": "turn1", "status": "inProgress" } }))
+                }
+                _ => Err(RpcFault::method_not_found(method)),
+            }
+        }
+    }
+
+    fn usage_of(window: Option<u64>) -> TurnUsage {
+        let client = client_against(Arc::new(UsageBackend { window }));
+        within(10, move || {
+            client.initialize("t").expect("initialize");
+            client
+                .start_thread(None, None, None, Some("never"), None, &[])
+                .expect("thread/start");
+            client.run_turn("hi").expect("run_turn")
+        })
+        .usage
+    }
+
+    /// The turn's cost is the sum of its model calls, but the *gauge* is only the
+    /// last one: every call's prompt already contains the whole conversation, so
+    /// adding them up would report a context several times fuller than it is.
+    #[test]
+    fn sums_the_turn_but_gauges_only_the_last_call() {
+        let usage = usage_of(Some(128_000));
+        assert_eq!(usage.input_tokens, 2500);
+        assert_eq!(usage.output_tokens, 60);
+        assert_eq!(usage.total_tokens, 2560);
+        assert_eq!(usage.context_tokens, 1540);
+        assert_eq!(usage.context_window, Some(128_000));
+        let percent = usage.context_percent().expect("a window was reported");
+        assert!((percent - 1.203).abs() < 0.01, "percent: {percent}");
+    }
+
+    /// No window, no gauge — the discipline gallium sets on the wire by sending
+    /// `modelContextWindow: null` rather than the guess it compacts against. A
+    /// share of a made-up denominator reads as a measurement.
+    #[test]
+    fn reports_no_gauge_when_the_backend_names_no_window() {
+        let usage = usage_of(None);
+        // The cost is still known and still worth reporting.
+        assert_eq!(usage.total_tokens, 2560);
+        assert_eq!(usage.context_window, None);
+        assert_eq!(usage.context_percent(), None);
+    }
+
+    /// A backend that sends no usage at all — an older gallium, or codex before
+    /// its usage notification — must land on "no gauge" too, not on a confident
+    /// zero. That confident zero is exactly what shipped: every app-server turn
+    /// printed "[0% context]" while the backend logged thousands of tokens.
+    #[test]
+    fn reports_no_gauge_when_the_backend_sends_no_usage() {
+        let client = client_against(Arc::new(ScriptedTurnBackend {
+            count: 1,
+            ending: "completed",
+        }));
+        let usage = within(10, move || {
+            client.initialize("t").expect("initialize");
+            client
+                .start_thread(None, None, None, Some("never"), None, &[])
+                .expect("thread/start");
+            client.run_turn("hi").expect("run_turn")
+        })
+        .usage;
+        assert_eq!(usage, TurnUsage::default());
+        assert_eq!(usage.context_percent(), None);
+    }
+
+    /// Zero is not a window, from either direction: a backend that reports one
+    /// has said nothing useful, and dividing by it is a crash or an infinity.
+    #[test]
+    fn a_zero_window_is_never_a_denominator() {
+        let usage = usage_of(Some(0));
+        assert_eq!(usage.context_window, None);
+        assert_eq!(usage.context_percent(), None);
     }
 
     /// A backend that accepts the turn and then dies must not wedge the caller
