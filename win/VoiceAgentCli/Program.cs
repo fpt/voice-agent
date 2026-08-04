@@ -209,7 +209,11 @@ void ProcessMessage(string text, bool speak)
         if (!string.IsNullOrEmpty(resp.reasoning))
             Console.WriteLine($"[90m💭 {resp.reasoning}[0m\n");
         Console.WriteLine($"Assistant: {resp.content}");
-        Console.WriteLine($"[90m[{(int)resp.contextPercent}% context][0m\n");
+        // Only when the backend measured one. A zero means it reported no usage,
+        // or no context window it could vouch for — printing "[0% context]"
+        // there is a confident claim that the context is empty.
+        if (resp.contextPercent > 0)
+            Console.WriteLine($"[90m[{(int)resp.contextPercent}% context][0m\n");
         if (speak)
         {
             voice ??= new VoiceOutput(speechCulture);

@@ -43,10 +43,24 @@ fn main() {
     let elapsed = started.elapsed();
 
     println!("turn took: {elapsed:?}");
-    println!("reply:     {reply:?}");
+    println!("reply:     {:?}", reply.text);
+    // A backend old enough to send no `thread/tokenUsage/updated` leaves this
+    // zeroed with no window, which is exactly how a frontend is told not to draw
+    // a gauge. Printing it either way is what makes the difference visible.
+    println!(
+        "usage:     in={}, out={}, total={} · context {}",
+        reply.usage.input_tokens,
+        reply.usage.output_tokens,
+        reply.usage.total_tokens,
+        match (reply.usage.context_percent(), reply.usage.context_window) {
+            (Some(pct), Some(window)) =>
+                format!("{}/{} ({pct:.0}%)", reply.usage.context_tokens, window),
+            _ => "not reported (no gauge)".to_string(),
+        }
+    );
 
     assert!(
-        !reply.is_empty(),
+        !reply.text.is_empty(),
         "empty reply — the client answered before the turn finished (the Stage 0 bug)"
     );
     println!("OK");

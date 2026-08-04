@@ -671,9 +671,11 @@ func runLoopTurn(_ prompt: String, muteMic: Bool) async -> AgentResponse? {
 /// Print the context gauge, but only when the backend actually reported one.
 ///
 /// It used to print unconditionally, so an app-server turn always showed
-/// "[0% context]" — `make_response` on that path hardcodes zero. Gallium had
-/// reported 7,106 tokens against a 128k window for that very turn; none of it
-/// reaches here, because the protocol carries no usage. Showing a confident 0%
+/// "[0% context]": nothing reached here, because the backend reported no usage
+/// at all. It does now — `thread/tokenUsage/updated` carries the tokens and the
+/// model's own window — but only when it knows the window. Gallium sends
+/// `modelContextWindow: null` rather than the guess it compacts against, and a
+/// zero here means exactly that: no measurement, so no gauge. A confident 0%
 /// for "unknown" is worse than showing nothing.
 func printContextUsage(_ response: AgentResponse) {
     guard response.contextPercent > 0 else { return }
