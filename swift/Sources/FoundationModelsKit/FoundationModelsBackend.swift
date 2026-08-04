@@ -126,6 +126,37 @@ struct ReadSituationTool: Tool {
     }
 }
 
+@available(macOS 26.0, iOS 26.0, *)
+struct LookupSkillTool: Tool {
+    let name = "lookup_skill"
+    let description =
+        "Look up a skill's full instructions. Use action 'list' to see the available skills, or 'get' with a name to read one before applying it."
+
+    @Generable
+    struct Arguments {
+        @Guide(description: "Either \"list\" or \"get\"")
+        var action: String
+        @Guide(description: "Skill name, required when action is \"get\"")
+        var name: String
+    }
+
+    let store: SkillStore
+
+    func call(arguments: Arguments) async throws -> String {
+        try await toolResult {
+            switch arguments.action.trimmingCharacters(in: .whitespaces).lowercased() {
+            case "get":
+                let wanted = arguments.name.trimmingCharacters(in: .whitespaces)
+                // `@Generable` guarantees the field exists, not that it is
+                // filled — a model asking to "get" nothing wants the list.
+                return wanted.isEmpty ? store.list() : store.get(wanted)
+            default:
+                return store.list()
+            }
+        }
+    }
+}
+
 /// Verdict shape for goal evaluation.
 ///
 /// The whole point of `@Generable` here: the app-server path asks a model for a
@@ -209,7 +240,9 @@ public final class FoundationModelsBackend: AgentBackend, @unchecked Sendable {
     /// at construction) and on `reset()`.
     private var session: LanguageModelSession
     private var systemPrompt: String = ""
-    private var skills: [(name: String, description: String)] = []
+    /// Names and descriptions go into the instructions; bodies stay here and
+    /// reach the model through `lookup_skill`.
+    private let skills = SkillStore()
 
     private var goalCondition: String?
     private var goalStartedAt: Date?
@@ -268,14 +301,14 @@ public final class FoundationModelsBackend: AgentBackend, @unchecked Sendable {
         self.perception = perception
         self.situation = situation
         self.session = LanguageModelSession(
-            tools: Self.tools(perception: perception, situation: situation),
+            tools: Self.tools(perception: perception, situation: situation, skills: skills),
             instructions: ""
         )
         logger.info("on-device model ready")
     }
 
     private static func tools(
-        perception: any EnvironmentPerception, situation: SituationStore
+        perception: any EnvironmentPerception, situation: SituationStore, skills: SkillStore
     ) -> [any Tool] {
         let d = perception.descriptions
         return [
@@ -283,11 +316,12 @@ public final class FoundationModelsBackend: AgentBackend, @unchecked Sendable {
             FindTool(name: d.findName, description: d.findDescription, perception: perception),
             ReadTool(name: d.readName, description: d.readDescription, perception: perception),
             ReadSituationTool(store: situation),
+            LookupSkillTool(store: skills),
         ]
     }
 
     private func makeTools() -> [any Tool] {
-        Self.tools(perception: perception, situation: situation)
+        Self.tools(perception: perception, situation: situation, skills: skills)
     }
 
     // MARK: Instructions
@@ -312,8 +346,10 @@ public final class FoundationModelsBackend: AgentBackend, @unchecked Sendable {
         // front"), which measured ~992 tokens for two skills — a quarter of this
         // model's entire window. A catalog costs a line each.
         if !skills.isEmpty {
-            let lines = skills.map { "- \($0.name): \($0.description)" }.joined(separator: "\n")
-            parts.append("Available skills:\n\(lines)")
+            let lines = skills.catalog().joined(separator: "\n")
+            parts.append(
+                "Available skills — read one with lookup_skill before applying it:\n\(lines)"
+            )
         }
 
         return parts.joined(separator: "\n\n")
@@ -394,13 +430,11 @@ public final class FoundationModelsBackend: AgentBackend, @unchecked Sendable {
     public func addSkill(name: String, description: String, prompt: String) async {
         await sessionGate.acquire()
         defer { sessionGate.release() }
-        // `prompt` is intentionally dropped: inlining full skill prompts does not
-        // fit this model's window. Stage 3 gives the model a lookup tool so it
-        // can fetch one on demand.
-        locked {
-            skills.append((name: name, description: description))
-            rebuildSessionLocked()
-        }
+        // The body is kept but not inlined: it is served by `lookup_skill`. Two
+        // skills cost ~866 tokens inlined against ~101 for their catalog, and
+        // this model's whole window is 4096 shared between input and output.
+        skills.add(name: name, description: description, body: prompt)
+        locked { rebuildSessionLocked() }
     }
 
     // MARK: Ambient context

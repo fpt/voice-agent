@@ -154,10 +154,13 @@ call `ScreenTools` directly. No capture bridge, no 100 ms poller.
 
 Comfortable, and the headroom comes from two decisions:
 
-- **Skills are catalogued, not inlined.** The app-server path inlines each
-  skill's full prompt (~992 tokens for two); a name-and-description line each
-  costs a fraction of that. `addSkill` deliberately drops the prompt body.
-- **Tool results are capped** at 1500 characters (`ScreenTools.maxResultChars`),
+- **Skills are catalogued, not inlined.** The body is kept in a `SkillStore` and
+  reaches the model through `lookup_skill`, matching gallium's `LookupSkill` and
+  codex's on-demand rendering; only names and descriptions go into the
+  instructions (~101 tokens against ~866 for the full prompts). The tool's schema
+  costs ~54 tokens — a "hi" turn went from ~683 to ~737, which is the price of
+  skills being usable at all on this path rather than advertised and unreachable.
+- **Tool results are capped** at 1500 characters (`PerceptionLimits.maxResultChars`),
   roughly 375 tokens. `read_window` is OCR and would otherwise return tens of
   thousands of characters in a single call.
 
