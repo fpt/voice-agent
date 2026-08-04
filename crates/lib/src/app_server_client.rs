@@ -422,6 +422,39 @@ impl AppServerClient {
             .to_string())
     }
 
+    /// Ask the backend to load our skills for the whole connection, codex-style.
+    ///
+    /// Returns whether it took them. Codex exposes `skills/extraRoots/set` and
+    /// then does its own metadata injection and on-demand body rendering, so a
+    /// success here means we do not have to inline the bodies ourselves.
+    ///
+    /// gallium has no such method and answers method-not-found; it takes paths
+    /// per thread instead. That is not an error — it is how we tell the two
+    /// apart, before any thread exists.
+    pub fn register_skill_roots(&self, paths: &[String]) -> bool {
+        if paths.is_empty() {
+            return false;
+        }
+        match self
+            .conn
+            .request("skills/extraRoots/set", json!({ "extraRoots": paths }))
+        {
+            Ok(_) => {
+                tracing::info!(
+                    "backend loaded {} skill root(s) for the connection",
+                    paths.len()
+                );
+                true
+            }
+            Err(e) => {
+                tracing::debug!(
+                    "backend has no skills/extraRoots/set ({e}); will pass skillPaths per thread"
+                );
+                false
+            }
+        }
+    }
+
     /// Open a thread, registering our [`ClientTool`]s as the backend's
     /// `dynamicTools`, and return its id. Does **not** become the client's main
     /// thread — use [`start_thread`](Self::start_thread) for that. Handy for a
@@ -435,7 +468,7 @@ impl AppServerClient {
         approval_policy: Option<&str>,
         config: Option<Value>,
         skill_paths: &[String],
-    ) -> Result<String, AgentError> {
+    ) -> Result<(String, Option<u64>), AgentError> {
         let dynamic_tools: Vec<Value> = self
             .shared
             .tools
@@ -485,27 +518,27 @@ impl AppServerClient {
         // gallium answers with `skillCount`; codex does not. Report what came
         // back so a path that landed nowhere is visible at thread start rather
         // than as a model later claiming it has no skills.
+        let skill_count = resp.get("skillCount").and_then(Value::as_u64);
         if !skill_paths.is_empty() {
-            match resp.get("skillCount").and_then(Value::as_u64) {
+            match skill_count {
                 Some(0) => tracing::warn!(
                     "backend registered no skills from skillPaths {:?} — its skill-lookup tool \
                      will report none",
                     skill_paths
                 ),
                 Some(n) => tracing::info!("backend registered {} skill(s)", n),
-                // Older backend, or codex: it ignored the field. The inlined
-                // catalog still carries the skills, so this is not a failure.
                 None => tracing::debug!(
                     "backend did not report skillCount; skillPaths may be unsupported"
                 ),
             }
         }
 
-        thread_id_of(&resp).map(str::to_string).ok_or_else(|| {
+        let thread_id = thread_id_of(&resp).map(str::to_string).ok_or_else(|| {
             AgentError::InternalError(format!(
                 "thread/start named no thread (expected `thread.id` or `threadId`): {resp}"
             ))
-        })
+        })?;
+        Ok((thread_id, skill_count))
     }
 
     /// Open a thread and adopt it as the client's main conversation thread (the
@@ -519,8 +552,8 @@ impl AppServerClient {
         approval_policy: Option<&str>,
         config: Option<Value>,
         skill_paths: &[String],
-    ) -> Result<String, AgentError> {
-        let thread_id = self.open_thread(
+    ) -> Result<(String, Option<u64>), AgentError> {
+        let (thread_id, skill_count) = self.open_thread(
             cwd,
             model,
             developer_instructions,
@@ -529,7 +562,7 @@ impl AppServerClient {
             skill_paths,
         )?;
         *self.thread_id.lock() = Some(thread_id.clone());
-        Ok(thread_id)
+        Ok((thread_id, skill_count))
     }
 
     /// Run one turn on an explicit thread and return the agent's final text.

@@ -59,20 +59,40 @@ impl SkillRegistry {
     /// over the wire — the backend gets everything up front). Returns None if no skills
     /// are registered.
     pub fn catalog(&self) -> Option<String> {
+        self.catalog_with_bodies(true)
+    }
+
+    /// Catalog with each skill's full prompt, or names and descriptions only.
+    ///
+    /// The bodies are what cost: our two skills are ~866 tokens inlined against
+    /// ~101 for the catalog alone. A backend that registered the skills itself
+    /// can hand a body to the model on demand through its own lookup tool, so
+    /// inlining them there is paying twice.
+    ///
+    /// The catalog itself always goes in. Dropping it too would save another
+    /// ~100 tokens and reintroduce the failure this whole thread started with —
+    /// a model that does not know a skill exists never looks it up.
+    pub fn catalog_with_bodies(&self, include_bodies: bool) -> Option<String> {
         let skills = self.skills.read().unwrap();
         if skills.is_empty() {
             return None;
         }
         let mut entries: Vec<&Skill> = skills.values().collect();
         entries.sort_by(|a, b| a.name.cmp(&b.name));
-        let mut out = String::from(
-            "Available skills — apply the relevant one's instructions when it fits the request:\n",
-        );
+        let mut out = String::from(if include_bodies {
+            "Available skills — apply the relevant one's instructions when it fits the request:\n"
+        } else {
+            "Available skills — look one up to read its full instructions before applying it:\n"
+        });
         for s in entries {
-            out.push_str(&format!(
-                "\n## {} — {}\n{}\n",
-                s.name, s.description, s.prompt
-            ));
+            if include_bodies {
+                out.push_str(&format!(
+                    "\n## {} — {}\n{}\n",
+                    s.name, s.description, s.prompt
+                ));
+            } else {
+                out.push_str(&format!("\n## {} — {}\n", s.name, s.description));
+            }
         }
         Some(out)
     }
@@ -81,6 +101,47 @@ impl SkillRegistry {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The bodies are the expensive part; the catalog is what makes a skill
+    /// discoverable at all. A backend that holds the skills itself gets the
+    /// catalog only and fetches a body when it wants one.
+    #[test]
+    fn catalog_can_omit_bodies_but_never_the_names() {
+        let registry = SkillRegistry::new();
+        registry.add(
+            "desk-activity".into(),
+            "Connect the screen to a task board".into(),
+            "STEP ONE: call list_windows and report.".into(),
+        );
+
+        let full = registry.catalog_with_bodies(true).expect("registered");
+        assert!(full.contains("STEP ONE"), "{full}");
+
+        let lean = registry.catalog_with_bodies(false).expect("registered");
+        assert!(
+            !lean.contains("STEP ONE"),
+            "the body must be dropped: {lean}"
+        );
+        // Still discoverable, and still says what it is for.
+        assert!(lean.contains("desk-activity"), "{lean}");
+        assert!(
+            lean.contains("Connect the screen to a task board"),
+            "{lean}"
+        );
+        // And says how to get the rest.
+        assert!(lean.contains("look one up"), "{lean}");
+
+        assert!(lean.len() < full.len());
+    }
+
+    /// `catalog()` keeps its old meaning for callers that have not been taught
+    /// about the split.
+    #[test]
+    fn catalog_defaults_to_including_bodies() {
+        let registry = SkillRegistry::new();
+        registry.add("a".into(), "d".into(), "the body".into());
+        assert!(registry.catalog().unwrap().contains("the body"));
+    }
 
     #[test]
     fn test_skill_registry() {
