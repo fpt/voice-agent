@@ -217,7 +217,11 @@ void ProcessMessage(string text, bool speak)
         {
             var shown = resp.contextPercent < 1
                 ? "<1"
-                : ((int)Math.Round(resp.contextPercent)).ToString();
+                // Away from zero, because .NET rounds midpoints to even by
+                // default and Swift's `rounded()` does not — 2.5% would read as
+                // 2% here and 3% on macOS, off the same number.
+                : ((int)Math.Round(resp.contextPercent, MidpointRounding.AwayFromZero))
+                    .ToString();
             Console.WriteLine($"[90m[{shown}% context][0m\n");
         }
         if (speak)

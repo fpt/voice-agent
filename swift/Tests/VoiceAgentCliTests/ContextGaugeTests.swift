@@ -24,4 +24,12 @@ final class ContextGaugeTests: XCTestCase {
         XCTAssertEqual(contextGaugeLine(percent: 6.7), "\u{1B}[90m[7% context]\u{1B}[0m\n")
         XCTAssertEqual(contextGaugeLine(percent: 99.6), "\u{1B}[90m[100% context]\u{1B}[0m\n")
     }
+
+    /// A midpoint goes away from zero, which is the rule the Windows CLI is
+    /// asked for explicitly — .NET rounds midpoints to even by default, and the
+    /// two frontends reading the same number differently is a bug report nobody
+    /// can reproduce on one machine.
+    func testAMidpointRoundsAwayFromZero() {
+        XCTAssertEqual(contextGaugeLine(percent: 2.5), "\u{1B}[90m[3% context]\u{1B}[0m\n")
+    }
 }
