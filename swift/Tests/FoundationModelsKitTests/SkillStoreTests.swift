@@ -71,6 +71,20 @@ final class SkillStoreTests: XCTestCase {
         XCTAssertTrue(out.contains("truncated"), out)
     }
 
+    /// "Same name" must mean the same thing to `add` as it does to `get`.
+    /// Matching exactly on add while looking up case-insensitively left two
+    /// entries and returned the stale body.
+    func testReplacementUsesTheSameKeyAsLookup() {
+        let s = SkillStore()
+        s.add(name: "desk-activity", description: "first", body: "old")
+        s.add(name: "  Desk-Activity ", description: "second", body: "new")
+
+        XCTAssertEqual(s.catalog().count, 1, "a differently-cased name is the same skill")
+        let out = s.get("desk-activity")
+        XCTAssertTrue(out.contains("new"), out)
+        XCTAssertFalse(out.contains("old"), out)
+    }
+
     /// Re-registering replaces, matching gallium's registry.
     func testAddingTheSameNameTwiceReplaces() {
         let s = SkillStore()

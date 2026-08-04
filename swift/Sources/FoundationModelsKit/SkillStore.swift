@@ -29,9 +29,18 @@ public final class SkillStore: @unchecked Sendable {
     public func add(name: String, description: String, body: String) {
         lock.lock()
         defer { lock.unlock() }
-        // Last writer wins, matching gallium's registry.
-        skills.removeAll { $0.name == name }
+        // Last writer wins, matching gallium's registry — and "same name" has to
+        // mean what `get` means by it. Matching exactly here while looking up
+        // case-insensitively would let "Desk-Activity" register alongside
+        // "desk-activity" and leave `get` returning the older body.
+        let key = Self.key(name)
+        skills.removeAll { Self.key($0.name) == key }
         skills.append(Skill(name: name, description: description, body: body))
+    }
+
+    /// The one definition of "the same skill", used by both `add` and `get`.
+    private static func key(_ name: String) -> String {
+        name.trimmingCharacters(in: .whitespaces).lowercased()
     }
 
     public func removeAll() {
@@ -67,9 +76,9 @@ public final class SkillStore: @unchecked Sendable {
     /// A miss names what *is* there. A model that guessed the name otherwise
     /// learns nothing from the failure and tends to guess again.
     func get(_ name: String) -> String {
-        let wanted = name.trimmingCharacters(in: .whitespaces).lowercased()
+        let wanted = Self.key(name)
         let match = lock.withLock {
-            skills.first { $0.name.lowercased() == wanted }
+            skills.first { Self.key($0.name) == wanted }
         }
         guard let match else {
             let known = catalog()
