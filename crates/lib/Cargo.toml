@@ -10,6 +10,7 @@ crate-type = ["lib", "staticlib", "cdylib"]
 name = "voice_agent_core"
 
 [dependencies]
+base64.workspace = true
 crossbeam.workspace = true
 parking_lot.workspace = true
 serde.workspace = true

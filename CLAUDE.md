@@ -42,6 +42,7 @@ the split (voice-agent = platform + app-server client; the agent core lives in
 | `lib/src/llm.rs` | Shared data types only: `ChatMessage`, `ChatRole`, `TokenUsage`, `ImageContent`. No provider layer. |
 | `lib/src/mcp.rs` | JSON-RPC 2.0 / MCP wire-type constants used by `rpc.rs`. |
 | `lib/src/tool.rs` | The tool trait surface the capture/situation client tools implement: `ToolHandler`, `ToolResult`. (The built-in file/bash tools, their permission machinery, and the in-process `ToolRegistry` were removed — the backend owns tool dispatch now.) |
+| `lib/src/android/` | Android GUI automation over `adb`: `device.rs` (transport, rotation-aware geometry, normalized→pixel) + `tools.rs` (the `android_*` primitives). Off unless `VOICE_AGENT_ANDROID` is set. |
 | `lib/src/capture.rs` | Screen capture / find-window / OCR / list-windows tools (executed macOS-side via Swift; served to the backend as client tools). |
 | `lib/src/situation.rs` | `SituationMessages` ambient-context stack + `read_situation_messages` client tool. Fed by the frontend's periodic window-list poller (`push_situation_message`). |
 | `lib/src/goal.rs` | Session goal state + evaluation (runs on a throwaway backend thread). |
@@ -96,6 +97,80 @@ SDK with exactly that shape.
 - The transport (`appserver::rpc`) is **bidirectional** — inbound requests are dispatched on their own threads so a long `turn/start` can originate tool-call requests while the reader keeps running.
 - **Approvals**: `agent_new` takes an optional `MutationApprover` (a UniFFI foreign trait). When one is supplied, the main conversation thread opens with `approvalPolicy: "untrusted"` so the backend escalates every file write / shell command; the request arrives as an inbound `item/{fileChange,commandExecution}/requestApproval` and is routed to the approver, which blocks the turn until it answers allow-once / allow-session / deny. The macOS CLI's `ReplApprover` prompts on stdin in text mode, denies in voice mode (no safe way to confirm by speech), and auto-allows for one-shot `--prompt`. **With no approver the main thread opens `"never"` and the backend runs mutations autonomously** (this is what Windows does today, and it's why unconfigured builds edit files without asking). The throwaway `evaluate_goal` thread always uses `"never"` — it must not block on a prompt. voice-agent has no sandbox.
 - Half-duplex: `AudioCapture.mute()`/`unmute()` drops audio buffers during TTS playback.
+
+## Android GUI automation (`crates/lib/src/android/`)
+
+A set of general GUI primitives — `android_observe`, `android_tap`,
+`android_swipe`, `android_long_press`, `android_key`, `android_text`,
+`android_wait`, `android_info`, `android_launch_app` — served to the backend as
+client tools like the capture ones. **No per-app code lives here on purpose**:
+the goal is that composite skills ("open the build menu", "find the selected
+unit") are *discovered* on top of these, not hand-written per game.
+
+Pure Rust over `adb`, so it works from every frontend (macOS Swift, Windows C#)
+without touching either.
+
+```bash
+VOICE_AGENT_ANDROID=auto            # the only attached device
+VOICE_AGENT_ANDROID=<serial>        # a specific one; ADB overrides the binary
+```
+
+Unset means the tools are not registered at all, so a user with no phone never
+sees them. Set-but-unusable (no device, unauthorized, two attached) is a logged
+warning naming the cause, not silence.
+
+Drive it without the rest of the stack:
+
+```bash
+cd crates && cargo run --example android_probe -- tools     # what the model reads
+cargo run --example android_probe -- observe /tmp/s.png
+cargo run --example android_probe -- tap 0.908 0.537
+```
+
+### Coordinates are normalized, and rotation is read
+
+Every model-facing coordinate is `0.0..=1.0`, never pixels: a discovered skill
+recorded as `tap(0.91, 0.54)` survives a different device and a rotation;
+`tap(1213, 404)` does not. A pixel value passed where a fraction belongs is
+**rejected**, not clamped — clamping to the edge reads as "the tap missed"
+forever.
+
+`wm size` reports the *panel*, not the display. On a landscape handheld
+(Retroid Pocket 3+, rotation 1) it answers `752x1336` while the framebuffer —
+and every coordinate `input tap` accepts — is `1336x752`. Trusting it transposes
+every tap. Geometry therefore comes from `dumpsys window displays`' `cur=`
+field, which is already rotation-applied; `wm size` is only a fallback, with the
+swap applied by hand. `android_observe` compares the PNG's IHDR against the
+geometry it believed and warns if they ever disagree.
+
+Verified on-device: screenshot 1336x752, and `(0.908, 0.537)` → pixel
+`(1213, 404)` opened the icon that sat at that spot in the screenshot.
+
+### `am start`, not `monkey`
+
+`monkey -p <pkg> 1` is the usual one-liner and is **not** used. Against a large
+game it hung for over 20s, survived the adb client being killed (killing adb
+does not kill the on-device process — it was left orphaned in `futex_wait`), and
+never started the app. `launch_app` resolves the launcher activity with
+`cmd package resolve-activity --brief` and starts it explicitly: 143ms.
+
+Every `adb` invocation runs under a 20s timeout for that reason — a wedged adb
+must fail the tool call, not hang the turn.
+
+### Known limits
+
+- **No hover.** `adb shell input` has no pointer, so the
+  hypothesis → hover → tooltip → OCR loop is not expressible; `android_long_press`
+  is the nearest substitute. scrcpy's control socket is what unlocks a real
+  pointer and is the natural second transport behind `Device`.
+- **Latency.** Measured on a Retroid Pocket 3+: `input` ~650ms (Android's `input`
+  binary starts a JVM per call), screenshot ~400ms, geometry ~80ms. The scrcpy
+  control socket sends a binary message instead and would make input ~free.
+- **ASCII only** for `android_text`; Japanese needs an IME such as ADBKeyboard.
+  Non-ASCII is rejected with that explanation rather than silently typing
+  nothing.
+- **No crop / OCR / image-diff** yet — those need an image decoder in the crate
+  and are the other half of the plan's primitive set.
 
 ## Configuration
 
