@@ -1,3 +1,4 @@
+pub mod android;
 pub mod app_server_client;
 pub mod appserver;
 pub mod capture;
@@ -382,6 +383,21 @@ pub fn agent_new(
     tools.push(Arc::new(SuggestNextCheckClientTool {
         next_check: next_check.clone(),
     }));
+
+    // Android GUI primitives, only when the user asked for a device via
+    // VOICE_AGENT_ANDROID. A request that cannot be honoured (no device, an
+    // unauthorized one, two attached) is surfaced rather than dropped: the user
+    // asked for Android, so silence would look like the tools simply vanished.
+    match android::maybe_tools() {
+        Some(Ok(handlers)) => {
+            tracing::info!("android: {} tool(s) registered", handlers.len());
+            for handler in handlers {
+                tools.push(Arc::new(app_server_client::HandlerClientTool(handler)));
+            }
+        }
+        Some(Err(e)) => tracing::warn!("android tools requested but unavailable: {e}"),
+        None => {}
+    }
 
     // An approver means the frontend wants a gate: tell the backend to escalate
     // mutations (policy "untrusted"), and route those requests to the frontend.
